@@ -24,6 +24,8 @@ from ..core.gpu import detect_compute_backend
 from ..core.transcribe import MODEL_SIZES
 from .caption_editor import CaptionEditorWidget
 from .style_panel import StylePanel
+from .timeline_widget import TimelineWidget
+from .video_preview import VideoPreviewWidget
 from .workers import ExportWorker, GenerateWorker, run_in_thread
 
 
@@ -35,6 +37,7 @@ class MainWindow(QWidget):
 
         self.video_path: str | None = None
         self.video_info = None
+        self.cards: list = []
         self.generate_thread = None
         self.generate_worker = None
         self.export_thread = None
@@ -124,10 +127,26 @@ class MainWindow(QWidget):
         container = QWidget()
         layout = QVBoxLayout(container)
 
+        layout.addWidget(QLabel("Preview"))
+        self.video_preview = VideoPreviewWidget()
+        self.video_preview.setMinimumHeight(320)
+        self.video_preview.position_changed.connect(self._on_preview_position_changed)
+        layout.addWidget(self.video_preview, 2)
+
+        timeline_scroll = QScrollArea()
+        timeline_scroll.setWidgetResizable(True)
+        timeline_scroll.setFixedHeight(110)
+        self.timeline = TimelineWidget()
+        self.timeline.cards_changed.connect(self._on_timeline_cards_changed)
+        self.timeline.seek_requested.connect(self.video_preview.seek)
+        self.timeline.card_selected.connect(self._on_timeline_card_selected)
+        timeline_scroll.setWidget(self.timeline)
+        layout.addWidget(timeline_scroll)
+
         layout.addWidget(QLabel("Subtitles"))
         self.caption_editor = CaptionEditorWidget()
-        self.caption_editor.cards_changed.connect(self._on_cards_changed)
-        layout.addWidget(self.caption_editor)
+        self.caption_editor.cards_changed.connect(self._on_editor_cards_changed)
+        layout.addWidget(self.caption_editor, 1)
 
         export_row = QHBoxLayout()
         self.export_btn = QPushButton("Export Video with Captions")
@@ -160,6 +179,7 @@ class MainWindow(QWidget):
         self.video_path = path
         self.source_label.setText(Path(path).name)
         self.generate_btn.setEnabled(True)
+        self.video_preview.load_video(path)
 
     def _on_generate_clicked(self) -> None:
         if not self.video_path:
@@ -184,7 +204,10 @@ class MainWindow(QWidget):
 
     def _on_generate_finished(self, result) -> None:
         self.video_info = result.video_info
-        self.caption_editor.set_cards(result.cards, self.style_panel.formatting)
+        self.cards = result.cards
+        self._push_cards_everywhere()
+        self.timeline.set_duration(result.video_info.duration)
+        self.video_preview.set_style(self.style_panel.style)
         self.progress_bar.setVisible(False)
         self.generate_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
@@ -194,11 +217,30 @@ class MainWindow(QWidget):
         self.generate_btn.setEnabled(True)
         QMessageBox.critical(self, "Transcription failed", message)
 
-    def _on_cards_changed(self) -> None:
-        pass  # cards are edited in-place on caption_editor.cards
+    def _push_cards_everywhere(self, skip: str | None = None) -> None:
+        formatting = self.style_panel.formatting
+        if skip != "editor":
+            self.caption_editor.set_cards(list(self.cards), formatting)
+        if skip != "timeline":
+            self.timeline.set_cards(self.cards, formatting)
+        self.video_preview.set_cards(self.cards)
+
+    def _on_editor_cards_changed(self) -> None:
+        self.cards = self.caption_editor.cards
+        self._push_cards_everywhere(skip="editor")
+
+    def _on_timeline_cards_changed(self) -> None:
+        self.cards = self.timeline.cards
+        self._push_cards_everywhere(skip="timeline")
+
+    def _on_timeline_card_selected(self, index: int) -> None:
+        self.caption_editor.table.selectRow(index)
+
+    def _on_preview_position_changed(self, t: float) -> None:
+        self.timeline.set_playhead(t)
 
     def _on_style_or_formatting_changed(self) -> None:
-        pass  # style is read live from style_panel at export time
+        self.video_preview.set_style(self.style_panel.style)
 
     def _on_export_clicked(self) -> None:
         if not self.video_path or not self.video_info:
@@ -213,7 +255,7 @@ class MainWindow(QWidget):
         self.progress_bar.setRange(0, 0)  # indeterminate; ffmpeg burn-in has no easy progress hook here
 
         self.export_worker = ExportWorker(
-            self.video_path, self.caption_editor.cards, self.style_panel.style, self.video_info, out_path
+            self.video_path, self.cards, self.style_panel.style, self.video_info, out_path
         )
         self.export_worker.finished.connect(self._on_export_finished)
         self.export_worker.failed.connect(self._on_export_failed)
