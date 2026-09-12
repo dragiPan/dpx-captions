@@ -204,15 +204,29 @@ class StylePanel(QWidget):
         )
         form.addRow("Highlight color (sung)", self.highlight_color_btn)
 
+        self.bold_check = QCheckBox("Bold")
+        self.bold_check.setChecked(bool(self.style.Bold))
+        self.bold_check.toggled.connect(self._on_style_field)
+        form.addRow("", self.bold_check)
+
         self.outline_check = QCheckBox("Outline")
         self.outline_check.setChecked(bool(self.style.OutlineEnabled))
         self.outline_check.toggled.connect(self._on_style_field)
         form.addRow("", self.outline_check)
 
+        self.outline_slider = self._slider(0, 30, int(self.style.OutlineThickness * 100))
+        form.addRow("Outline thickness", self.outline_slider)
+
         self.shadow_check = QCheckBox("Shadow")
         self.shadow_check.setChecked(bool(self.style.ShadowEnabled))
         self.shadow_check.toggled.connect(self._on_style_field)
         form.addRow("", self.shadow_check)
+
+        self.shadow_slider = self._slider(0, 20, int(self.style.ShadowOffset * 100))
+        form.addRow("Shadow distance", self.shadow_slider)
+
+        self.pop_slider = self._slider(100, 160, int(self.style.HighlightPopScale * 100))
+        form.addRow("Highlight pop", self.pop_slider)
 
         self.pop_in_check = QCheckBox("Pop in")
         self.pop_in_check.toggled.connect(self._on_style_field)
@@ -233,7 +247,8 @@ class StylePanel(QWidget):
         self.anim_length_spin.valueChanged.connect(self._on_style_field)
         form.addRow("Animation length (s)", self.anim_length_spin)
 
-        for slider in (self.text_size_slider, self.pos_x_slider, self.pos_y_slider):
+        for slider in (self.text_size_slider, self.pos_x_slider, self.pos_y_slider,
+                       self.outline_slider, self.shadow_slider, self.pop_slider):
             slider.valueChanged.connect(self._on_style_field)
 
         return box
@@ -287,8 +302,12 @@ class StylePanel(QWidget):
     def _on_style_field(self, *_args) -> None:
         self.style.TextSize = self.text_size_slider.value() / 100.0
         self.style.TextPosition = [self.pos_x_slider.value() / 100.0, self.pos_y_slider.value() / 100.0, 0.0]
+        self.style.Bold = int(self.bold_check.isChecked())
         self.style.OutlineEnabled = int(self.outline_check.isChecked())
+        self.style.OutlineThickness = self.outline_slider.value() / 100.0
         self.style.ShadowEnabled = int(self.shadow_check.isChecked())
+        self.style.ShadowOffset = self.shadow_slider.value() / 100.0
+        self.style.HighlightPopScale = self.pop_slider.value() / 100.0
         self.style.PopInEnabled = int(self.pop_in_check.isChecked())
         self.style.SlideUpEnabled = int(self.slide_up_check.isChecked())
         self.style.FadeEnabled = int(self.fade_check.isChecked())
@@ -326,7 +345,8 @@ class StylePanel(QWidget):
             self.vocab_edit, self.density_combo, self.max_chars_spin, self.line_count_spin,
             self.text_case_combo, self.remove_punct_check, self.censor_check, self.censor_words_edit,
             self.font_combo, self.text_size_slider, self.pos_x_slider, self.pos_y_slider,
-            self.outline_check, self.shadow_check, self.pop_in_check, self.slide_up_check,
+            self.bold_check, self.outline_check, self.outline_slider, self.shadow_check,
+            self.shadow_slider, self.pop_slider, self.pop_in_check, self.slide_up_check,
             self.fade_check, self.anim_length_spin,
         ]
 
@@ -361,8 +381,12 @@ class StylePanel(QWidget):
         self.text_size_slider.setValue(int(self.style.TextSize * 100))
         self.pos_x_slider.setValue(int(self.style.TextPosition[0] * 100))
         self.pos_y_slider.setValue(int(self.style.TextPosition[1] * 100))
+        self.bold_check.setChecked(bool(self.style.Bold))
         self.outline_check.setChecked(bool(self.style.OutlineEnabled))
+        self.outline_slider.setValue(int(self.style.OutlineThickness * 100))
         self.shadow_check.setChecked(bool(self.style.ShadowEnabled))
+        self.shadow_slider.setValue(int(self.style.ShadowOffset * 100))
+        self.pop_slider.setValue(int(self.style.HighlightPopScale * 100))
         self.pop_in_check.setChecked(bool(self.style.PopInEnabled))
         self.slide_up_check.setChecked(bool(self.style.SlideUpEnabled))
         self.fade_check.setChecked(bool(self.style.FadeEnabled))

@@ -33,7 +33,7 @@ def generate_captions(
     backend = backend or detect_compute_backend()
     video_info = ffmpeg_util.probe(video_path)
 
-    tmp_dir = Path(tempfile.gettempdir()) / "captions_app"
+    tmp_dir = Path(tempfile.gettempdir()) / "dpx_captions"
     tmp_dir.mkdir(exist_ok=True)
     audio_path = tmp_dir / (Path(video_path).stem + ".wav")
 
@@ -83,7 +83,7 @@ def export_video(
 
     canvas = canvas_size(video_info.width, video_info.height, aspect)
 
-    tmp_dir = Path(tempfile.gettempdir()) / "captions_app"
+    tmp_dir = Path(tempfile.gettempdir()) / "dpx_captions"
     tmp_dir.mkdir(exist_ok=True)
     ass_path = tmp_dir / (Path(video_path).stem + ".ass")
     write_ass(cards, style, canvas[0], canvas[1], ass_path)

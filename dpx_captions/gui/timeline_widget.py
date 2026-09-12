@@ -62,6 +62,7 @@ class TimelineWidget(QWidget):
 
         self._inline_editor: QLineEdit | None = None
         self._inline_index: int | None = None
+        self.scroll_area = None  # set by the main window, for cursor-anchored zoom
 
     # -------------------------------------------------------------------- API
     def set_cards(self, cards: list[CaptionCard], formatting: CaptionFormatting) -> None:
@@ -130,6 +131,37 @@ class TimelineWidget(QWidget):
             if rect.left() - EDGE_GRAB_PX <= x <= rect.right() + EDGE_GRAB_PX:
                 return i
         return None
+
+    def _hit_test(self, x: float, y: float) -> tuple[int | None, str | None]:
+        """Which card and which drag mode the cursor is over.
+
+        Adjacent cards share a boundary pixel, so the side the cursor sits
+        on decides whether the left card's end or the right card's start is
+        grabbed - otherwise the left card always wins and the right one can
+        never be trimmed.
+        """
+        if y < self._cards_top() or y > self._cards_top() + CARD_H:
+            return None, None
+
+        best: tuple[float, int, str] | None = None
+        for i, card in enumerate(self.cards):
+            for edge_t, mode in ((card.start, "resize_left"), (card.end, "resize_right")):
+                edge_x = self._x_of(edge_t)
+                distance = abs(x - edge_x)
+                if distance > EDGE_GRAB_PX:
+                    continue
+                on_matching_side = (mode == "resize_left" and x >= edge_x) or (
+                    mode == "resize_right" and x <= edge_x
+                )
+                score = distance - (EDGE_GRAB_PX if on_matching_side else 0)
+                if best is None or score < best[0]:
+                    best = (score, i, mode)
+
+        if best is not None:
+            return best[1], best[2]
+
+        index = self._card_at(x, y)
+        return (index, "move") if index is not None else (None, None)
 
     def _snap(self, t: float, ignore_index: int | None) -> float:
         targets = [0.0, self.duration, self.playhead_t]
@@ -238,7 +270,7 @@ class TimelineWidget(QWidget):
             self._seek_to(x)
             return
 
-        idx = self._card_at(x, y)
+        idx, mode = self._hit_test(x, y)
         if idx is None:
             self.selected_index = None
             self._drag_mode = None
@@ -247,30 +279,23 @@ class TimelineWidget(QWidget):
 
         self.selected_index = idx
         self.card_selected.emit(idx)
-        rect = self._card_rect(idx)
         self._drag_index = idx
         self._drag_start_x = x
         self._drag_orig_start = self.cards[idx].start
         self._drag_orig_end = self.cards[idx].end
         self._drag_moved = False
-
-        if abs(x - rect.left()) <= EDGE_GRAB_PX:
-            self._drag_mode = "resize_left"
-        elif abs(x - rect.right()) <= EDGE_GRAB_PX:
-            self._drag_mode = "resize_right"
-        else:
-            self._drag_mode = "move"
+        self._drag_mode = mode
         self.update()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         x, y = event.position().x(), event.position().y()
 
         if self._drag_mode is None:
-            idx = self._card_at(x, y)
-            if idx is not None:
-                rect = self._card_rect(idx)
-                near_edge = abs(x - rect.left()) <= EDGE_GRAB_PX or abs(x - rect.right()) <= EDGE_GRAB_PX
-                self.setCursor(Qt.SizeHorCursor if near_edge else Qt.OpenHandCursor)
+            _, mode = self._hit_test(x, y)
+            if mode in ("resize_left", "resize_right"):
+                self.setCursor(Qt.SizeHorCursor)
+            elif mode == "move":
+                self.setCursor(Qt.OpenHandCursor)
             else:
                 self.setCursor(Qt.ArrowCursor)
             return
@@ -284,33 +309,58 @@ class TimelineWidget(QWidget):
             return
         self._drag_moved = True
 
-        lower = self.cards[i - 1].end if i > 0 else 0.0
-        upper = self.cards[i + 1].start if i + 1 < len(self.cards) else max(self.duration, self._drag_orig_end)
+        limit = max(self.duration, self._drag_orig_end)
         delta_t = (x - self._drag_start_x) / self.pixels_per_second
 
+        # Neighbours are deliberately not treated as walls: dragging past a
+        # card overwrites it on release, the way a timeline overwrite edit
+        # behaves. Snapping still provides the magnet feel until you push
+        # beyond the snap threshold.
         if self._drag_mode == "move":
             span = self._drag_orig_end - self._drag_orig_start
-            new_start = self._snap(self._drag_orig_start + delta_t, i)
-            new_start = max(lower, min(new_start, upper - span))
+            new_start = max(0.0, min(self._snap(self._drag_orig_start + delta_t, i), limit - span))
             new_end = new_start + span
         elif self._drag_mode == "resize_left":
-            new_start = self._snap(self._drag_orig_start + delta_t, i)
-            new_start = max(lower, min(new_start, self.cards[i].end - MIN_CARD_DURATION))
+            new_start = max(0.0, min(self._snap(self._drag_orig_start + delta_t, i),
+                                     self.cards[i].end - MIN_CARD_DURATION))
             new_end = self.cards[i].end
         else:
             new_start = self.cards[i].start
-            new_end = self._snap(self._drag_orig_end + delta_t, i)
-            new_end = min(upper, max(new_end, self.cards[i].start + MIN_CARD_DURATION))
+            new_end = min(limit, max(self._snap(self._drag_orig_end + delta_t, i),
+                                     self.cards[i].start + MIN_CARD_DURATION))
 
         self.cards[i] = replace(self.cards[i], start=new_start, end=new_end)
         self.update()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if self._drag_mode in ("move", "resize_left", "resize_right") and self._drag_moved:
+            if self._drag_index is not None:
+                self._apply_overwrite(self._drag_index)
             self.cards_changed.emit()
         self._drag_mode = None
         self._drag_index = None
         self.setCursor(Qt.ArrowCursor)
+
+    def _apply_overwrite(self, index: int) -> None:
+        """Trims or removes whatever the edited card now covers."""
+        edited = self.cards[index]
+        kept = []
+        for i, card in enumerate(self.cards):
+            if i == index:
+                continue
+            if card.end <= edited.start or card.start >= edited.end:
+                kept.append(card)
+            elif card.start >= edited.start and card.end <= edited.end:
+                continue  # fully covered
+            elif card.start < edited.start:
+                kept.append(replace(card, end=edited.start))
+            else:
+                kept.append(replace(card, start=edited.end))
+
+        kept.append(edited)
+        kept.sort(key=lambda c: c.start)
+        self.cards[:] = kept
+        self.selected_index = kept.index(edited)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         x, y = event.position().x(), event.position().y()
@@ -319,12 +369,22 @@ class TimelineWidget(QWidget):
             self._open_inline_editor(idx)
 
     def wheelEvent(self, event) -> None:  # noqa: N802
-        if event.modifiers() & Qt.ControlModifier:
-            factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
-            self.zoom_by(factor)
-            event.accept()
-        else:
+        if not event.modifiers() & (Qt.AltModifier | Qt.ControlModifier):
             event.ignore()
+            return
+
+        cursor_x = event.position().x()
+        anchor_t = self._t_of(cursor_x)
+        scroll_bar = self.scroll_area.horizontalScrollBar() if self.scroll_area else None
+        # Where the cursor sits inside the visible strip, so that the same
+        # instant stays under the pointer instead of jumping to clip start.
+        viewport_x = cursor_x - (scroll_bar.value() if scroll_bar else 0)
+
+        self.zoom_by(1.15 if event.angleDelta().y() > 0 else 1 / 1.15)
+
+        if scroll_bar:
+            scroll_bar.setValue(round(anchor_t * self.pixels_per_second - viewport_x))
+        event.accept()
 
     def _seek_to(self, x: float) -> None:
         t = min(self._t_of(x), self.duration if self.duration else self._t_of(x))

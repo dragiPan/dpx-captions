@@ -14,7 +14,14 @@ from .style import AnimationStyle, CaptionFormatting
 
 def settings_path() -> Path:
     base = os.environ.get("APPDATA") or str(Path.home())
-    return Path(base) / "CaptionsApp" / "settings.json"
+    path = Path(base) / "DPX Captions" / "settings.json"
+
+    legacy = Path(base) / "CaptionsApp" / "settings.json"
+    if legacy.exists() and not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(legacy.read_bytes())
+
+    return path
 
 
 def save_settings(

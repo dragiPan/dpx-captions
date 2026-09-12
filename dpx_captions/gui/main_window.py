@@ -35,7 +35,7 @@ TIMELINE_SCROLL_HEIGHT = 160
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Captions")
+        self.setWindowTitle("DPX Captions")
         self.resize(1280, 820)
 
         self.video_path: str | None = None
@@ -177,6 +177,7 @@ class MainWindow(QWidget):
         self.timeline.card_selected.connect(self._on_timeline_card_selected)
         self.timeline.play_pause_requested.connect(self.video_preview.toggle_play)
         timeline_scroll.setWidget(self.timeline)
+        self.timeline.scroll_area = timeline_scroll
         layout.addWidget(timeline_scroll)
 
         layout.addWidget(QLabel("Subtitles"))

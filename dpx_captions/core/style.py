@@ -28,6 +28,7 @@ class AnimationStyle:
     # Font
     Font: str = "Open Sans Condensed"
     Style: str = "Bold"
+    Bold: int = 1                  # app extension: applied identically by Qt and libass
     TextSize: float = 0.1          # fraction of frame height
     TextPosition: list[float] = field(default_factory=lambda: [0.5, 0.2, 0.0])
 
@@ -40,6 +41,9 @@ class AnimationStyle:
     # Highlight (active-word/sung) color
     HighlightEnabled: int = 1
     HighlightStyle: int = 0        # 0 = text-color fill (karaoke); 1 = box (not yet implemented)
+    # App extension. Kept modest: a long word scales around its own centre,
+    # so a large pop collides with its neighbours on the line.
+    HighlightPopScale: float = 1.1
     HighlightColorRed: float = 1.0
     HighlightColorGreen: float = 1.0
     HighlightColorBlue: float = 0.164
@@ -56,6 +60,7 @@ class AnimationStyle:
 
     # Shadow
     ShadowEnabled: int = 1
+    ShadowOffset: float = 0.03     # app extension: shadow distance, as a fraction of font size
     ShadowColorRed: float = 0.0
     ShadowColorGreen: float = 0.0
     ShadowColorBlue: float = 0.0
@@ -66,6 +71,9 @@ class AnimationStyle:
         settings = data.get("macroSettings", data)
         known = {f for f in cls.__dataclass_fields__}
         filtered = {k: v for k, v in settings.items() if k in known}
+        # AutoSubs presets express weight through the Style string only.
+        if "Bold" not in filtered:
+            filtered["Bold"] = int("bold" in str(settings.get("Style", "")).lower())
         return cls(**filtered)
 
     def to_preset_dict(self, name: str = "Custom", description: str = "") -> dict:

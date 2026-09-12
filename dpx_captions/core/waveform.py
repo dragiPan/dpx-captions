@@ -14,7 +14,7 @@ BUCKETS_PER_SECOND = 100
 
 
 def audio_cache_path(video_path: str) -> Path:
-    tmp_dir = Path(tempfile.gettempdir()) / "captions_app"
+    tmp_dir = Path(tempfile.gettempdir()) / "dpx_captions"
     tmp_dir.mkdir(exist_ok=True)
     return tmp_dir / (Path(video_path).stem + ".wav")
 
