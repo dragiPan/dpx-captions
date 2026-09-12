@@ -9,3 +9,6 @@ scratch/
 *.ass
 *.wav
 *.log
+
+# Downloaded at runtime via the in-app font downloader
+fonts/

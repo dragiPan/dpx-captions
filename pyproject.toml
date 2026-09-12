@@ -1,7 +1,7 @@
 [project]
-name = "captions-app"
+name = "dpx-captions"
 version = "0.1.0"
-description = "Standalone caption generation and editing app for fitness content (Serbian Latin transcription + animated captions)"
+description = "DPX Captions - Serbian-first caption generation and burn-in for short-form video"
 requires-python = ">=3.11"
 dependencies = [
     "PySide6>=6.7",
@@ -20,4 +20,4 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["captions_app*"]
+include = ["dpx_captions*"]

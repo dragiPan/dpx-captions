@@ -1,4 +1,4 @@
-# Sets up the captions-app Python environment.
+# Sets up the DPX Captions Python environment.
 # Run from the project root: powershell -ExecutionPolicy Bypass -File scripts\setup_env.ps1
 
 $ErrorActionPreference = "Stop"
@@ -40,4 +40,4 @@ if (-not $ffmpegOk) {
 
 Write-Host ""
 Write-Host "Setup complete. Run the app with:"
-Write-Host "  .venv\Scripts\python.exe -m captions_app.main"
+Write-Host "  .venv\Scripts\python.exe -m dpx_captions.main"
