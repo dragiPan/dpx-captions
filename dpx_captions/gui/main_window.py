@@ -65,7 +65,8 @@ class MainWindow(QWidget):
     def _build_left_panel(self) -> QWidget:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFixedWidth(420)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -90,6 +91,9 @@ class MainWindow(QWidget):
 
         layout.addStretch(1)
         scroll.setWidget(container)
+        # Wide enough for the controls plus the vertical scrollbar, so the
+        # panel never needs to scroll sideways.
+        scroll.setFixedWidth(container.sizeHint().width() + scroll.verticalScrollBar().sizeHint().width() + 8)
         return scroll
 
     def _build_source_group(self) -> QGroupBox:
@@ -183,6 +187,7 @@ class MainWindow(QWidget):
         layout.addWidget(QLabel("Subtitles"))
         self.caption_editor = CaptionEditorWidget()
         self.caption_editor.cards_changed.connect(self._on_editor_cards_changed)
+        self.caption_editor.add_card_requested.connect(self._on_add_card)
         layout.addWidget(self.caption_editor, 1)
 
         export_row = QHBoxLayout()
@@ -287,7 +292,12 @@ class MainWindow(QWidget):
         self._push_cards_everywhere(skip="timeline")
 
     def _on_timeline_card_selected(self, index: int) -> None:
-        self.caption_editor.table.selectRow(index)
+        self.caption_editor.select_row(index)
+
+    def _on_add_card(self) -> None:
+        self.timeline.add_card_at_playhead()
+        if self.timeline.selected_index is not None:
+            self.caption_editor.select_row(self.timeline.selected_index)
 
     def _on_preview_position_changed(self, t: float) -> None:
         self.timeline.set_playhead(t)

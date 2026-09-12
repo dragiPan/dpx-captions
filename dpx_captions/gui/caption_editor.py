@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtGui import QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -64,6 +65,7 @@ def rebuild_card_text(card: CaptionCard, new_text: str, formatting: CaptionForma
 
 class CaptionEditorWidget(QWidget):
     cards_changed = Signal()
+    add_card_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -89,10 +91,41 @@ class CaptionEditorWidget(QWidget):
         btn_row.addStretch(1)
         layout.addLayout(btn_row)
 
-        self.add_btn.clicked.connect(self._add_card)
+        self.add_btn.clicked.connect(self.add_card_requested)
         self.merge_btn.clicked.connect(self._merge_selected)
         self.delete_btn.clicked.connect(self._delete_selected)
         self.table.itemChanged.connect(self._on_text_changed)
+        # Filtered on the table itself: while a cell is being edited the key
+        # events go to the cell editor instead, so in-cell copy/paste still
+        # behaves normally.
+        self.table.installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self.table and event.type() == QEvent.KeyPress:
+            if event.matches(QKeySequence.Copy):
+                self._copy_selected()
+                return True
+            if event.matches(QKeySequence.Paste):
+                self._paste_into_selected()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _copy_selected(self) -> None:
+        rows = self._selected_rows()
+        if not rows:
+            return
+        QGuiApplication.clipboard().setText("\n".join(_card_text(self.cards[r]) for r in rows))
+
+    def _paste_into_selected(self) -> None:
+        text = QGuiApplication.clipboard().text()
+        rows = self._selected_rows()
+        if not text.strip() or not rows:
+            return
+        lines = [line for line in text.splitlines() if line.strip()]
+        for row, line in zip(rows, lines):
+            self.cards[row] = rebuild_card_text(self.cards[row], line, self.formatting)
+        self._refresh_table()
+        self.cards_changed.emit()
 
     def set_cards(self, cards: list[CaptionCard], formatting: CaptionFormatting) -> None:
         self.cards = list(cards)
@@ -165,9 +198,7 @@ class CaptionEditorWidget(QWidget):
         self._refresh_table()
         self.cards_changed.emit()
 
-    def _add_card(self) -> None:
-        last_end = self.cards[-1].end if self.cards else 0.0
-        w = Word(text="new", start=last_end, end=last_end + 1.0)
-        self.cards.append(CaptionCard(lines=[[w]], start=w.start, end=w.end))
-        self._refresh_table()
-        self.cards_changed.emit()
+    def select_row(self, index: int) -> None:
+        if 0 <= index < self.table.rowCount():
+            self.table.selectRow(index)
+            self.table.scrollToItem(self.table.item(index, COL_TEXT))

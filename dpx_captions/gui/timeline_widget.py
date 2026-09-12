@@ -10,11 +10,12 @@ from dataclasses import replace
 
 import numpy as np
 from PySide6.QtCore import QPoint, QRect, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap, QPolygon
+from PySide6.QtGui import QColor, QGuiApplication, QKeySequence, QPainter, QPen, QPixmap, QPolygon
 from PySide6.QtWidgets import QLineEdit, QWidget
 
 from ..core.caption_builder import CaptionCard
 from ..core.style import CaptionFormatting
+from ..core.transcribe import Word
 from ..core.waveform import BUCKETS_PER_SECOND
 from .caption_editor import rebuild_card_text
 
@@ -369,13 +370,21 @@ class TimelineWidget(QWidget):
             self._open_inline_editor(idx)
 
     def wheelEvent(self, event) -> None:  # noqa: N802
-        if not event.modifiers() & (Qt.AltModifier | Qt.ControlModifier):
+        scroll_bar = self.scroll_area.horizontalScrollBar() if self.scroll_area else None
+
+        if event.modifiers() & Qt.AltModifier:
+            if scroll_bar:
+                delta = event.angleDelta().y() or event.angleDelta().x()
+                scroll_bar.setValue(scroll_bar.value() - delta)
+            event.accept()
+            return
+
+        if not event.modifiers() & Qt.ControlModifier:
             event.ignore()
             return
 
         cursor_x = event.position().x()
         anchor_t = self._t_of(cursor_x)
-        scroll_bar = self.scroll_area.horizontalScrollBar() if self.scroll_area else None
         # Where the cursor sits inside the visible strip, so that the same
         # instant stays under the pointer instead of jumping to clip start.
         viewport_x = cursor_x - (scroll_bar.value() if scroll_bar else 0)
@@ -394,7 +403,11 @@ class TimelineWidget(QWidget):
 
     # --------------------------------------------------------------- keyboard
     def keyPressEvent(self, event) -> None:  # noqa: N802
-        if event.key() == Qt.Key_B and event.modifiers() & Qt.ControlModifier:
+        if event.matches(QKeySequence.Copy):
+            self.copy_selected()
+        elif event.matches(QKeySequence.Paste):
+            self.paste_into_selected()
+        elif event.key() == Qt.Key_B and event.modifiers() & Qt.ControlModifier:
             self.split_at_playhead()
         elif event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
             self.delete_selected()
@@ -420,6 +433,42 @@ class TimelineWidget(QWidget):
             self.cards_changed.emit()
             self.update()
             return
+
+    def add_card_at_playhead(self, text: str = "NEW") -> None:
+        """Inserts a card at the playhead, overwriting whatever it lands on.
+
+        Appending to the end of the list instead would drop the card past
+        the end of the clip, where it is neither visible nor useful.
+        """
+        start = self.playhead_t
+        end = min(start + 1.0, self.duration) if self.duration else start + 1.0
+        if end - start < MIN_CARD_DURATION:
+            return
+
+        words = [Word(text=part, start=start, end=end) for part in (text.split() or ["NEW"])]
+        span = (end - start) / len(words)
+        for i, word in enumerate(words):
+            words[i] = replace(word, start=start + i * span, end=start + (i + 1) * span)
+
+        self.cards.append(CaptionCard(lines=[words], start=start, end=end))
+        self._apply_overwrite(len(self.cards) - 1)
+        self.cards_changed.emit()
+        self.update()
+
+    def copy_selected(self) -> None:
+        if self.selected_index is None or self.selected_index >= len(self.cards):
+            return
+        card = self.cards[self.selected_index]
+        QGuiApplication.clipboard().setText(" ".join(w.text for line in card.lines for w in line))
+
+    def paste_into_selected(self) -> None:
+        text = QGuiApplication.clipboard().text().strip()
+        if not text or self.selected_index is None or self.selected_index >= len(self.cards):
+            return
+        index = self.selected_index
+        self.cards[index] = rebuild_card_text(self.cards[index], text, self.formatting)
+        self.cards_changed.emit()
+        self.update()
 
     def delete_selected(self) -> None:
         if self.selected_index is None or self.selected_index >= len(self.cards):
