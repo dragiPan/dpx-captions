@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, QThread, Signal
 
 from ..core import pipeline
+from ..core.aspect import Aspect
 from ..core.caption_builder import CaptionCard
 from ..core.ffmpeg_util import VideoInfo
 from ..core.gpu import ComputeBackend
@@ -59,17 +60,19 @@ class ExportWorker(QObject):
     failed = Signal(str)
 
     def __init__(self, video_path: str, cards: list[CaptionCard], style: AnimationStyle,
-                 video_info: VideoInfo, output_path: str):
+                 video_info: VideoInfo, output_path: str, aspect: Aspect = Aspect.AUTO):
         super().__init__()
         self.video_path = video_path
         self.cards = cards
         self.style = style
         self.video_info = video_info
         self.output_path = output_path
+        self.aspect = aspect
 
     def run(self) -> None:
         try:
-            pipeline.export_video(self.video_path, self.cards, self.style, self.video_info, self.output_path)
+            pipeline.export_video(self.video_path, self.cards, self.style, self.video_info,
+                                  self.output_path, self.aspect)
             self.finished.emit(self.output_path)
         except Exception as exc:
             self.failed.emit(str(exc))

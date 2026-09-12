@@ -103,6 +103,10 @@ class MainWindow(QWidget):
         row.addWidget(pick_btn)
         layout.addLayout(row)
         layout.addWidget(self.source_label)
+
+        self.source_info_label = QLabel("")
+        self.source_info_label.setStyleSheet("color: #9ab;")
+        layout.addWidget(self.source_info_label)
         return box
 
     def _build_model_group(self) -> QGroupBox:
@@ -215,7 +219,12 @@ class MainWindow(QWidget):
         self.video_preview.load_video(path)
 
         self.video_info = ffmpeg_util.probe(path)
-        self.timeline.set_duration(self.video_info.duration)
+        info = self.video_info
+        minutes, seconds = divmod(info.duration, 60)
+        self.source_info_label.setText(
+            f"{int(minutes)}:{seconds:04.1f}  •  {info.width}×{info.height}  •  {info.fps:.2f} fps"
+        )
+        self.timeline.set_duration(info.duration)
         self.video_preview.set_style(self.style_panel.style)
         self._load_waveform(path)
 
@@ -295,6 +304,7 @@ class MainWindow(QWidget):
             self.model_combo.setCurrentText(saved["model_label"])
         self.force_cpu_check.setChecked(saved["force_cpu"])
         self.last_directory = saved["last_directory"]
+        self.video_preview.set_aspect(saved["aspect"])
         self.video_preview.set_style(self.style_panel.style)
 
     def _save_settings(self) -> None:
@@ -304,6 +314,7 @@ class MainWindow(QWidget):
             self.model_combo.currentText(),
             self.force_cpu_check.isChecked(),
             self.last_directory,
+            self.video_preview.aspect(),
         )
 
     def closeEvent(self, event) -> None:  # noqa: N802
@@ -323,7 +334,8 @@ class MainWindow(QWidget):
         self.progress_bar.setRange(0, 0)  # indeterminate; ffmpeg burn-in has no easy progress hook here
 
         self.export_worker = ExportWorker(
-            self.video_path, self.cards, self.style_panel.style, self.video_info, out_path
+            self.video_path, self.cards, self.style_panel.style, self.video_info, out_path,
+            self.video_preview.aspect(),
         )
         self.export_worker.finished.connect(self._on_export_finished)
         self.export_worker.failed.connect(self._on_export_failed)

@@ -176,6 +176,10 @@ class StylePanel(QWidget):
         self.font_warning.setVisible(False)
         form.addRow("", self.font_warning)
 
+        self.download_fonts_btn = QPushButton("Download caption fonts...")
+        self.download_fonts_btn.clicked.connect(self._open_font_downloader)
+        form.addRow("", self.download_fonts_btn)
+
         self.text_size_slider = self._slider(1, 40, int(self.style.TextSize * 100))
         form.addRow("Text size", self.text_size_slider)
 
@@ -247,6 +251,22 @@ class StylePanel(QWidget):
 
     def _set_highlight_color(self, r, g, b) -> None:
         self.style.HighlightColorRed, self.style.HighlightColorGreen, self.style.HighlightColorBlue = r, g, b
+        self.changed.emit()
+
+    def _open_font_downloader(self) -> None:
+        from .font_dialog import FontDownloadDialog
+
+        dialog = FontDownloadDialog(self)
+        dialog.fonts_installed.connect(self._on_fonts_installed)
+        dialog.exec()
+
+    def _on_fonts_installed(self) -> None:
+        # Re-select the configured family: it may exist now that new font
+        # files have been registered with Qt.
+        self.font_combo.blockSignals(True)
+        self.font_combo.setCurrentFont(QFont(self.style.Font))
+        self.font_combo.blockSignals(False)
+        self._update_font_warning()
         self.changed.emit()
 
     def _on_font_picked(self, font: QFont) -> None:

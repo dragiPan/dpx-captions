@@ -8,6 +8,7 @@ import os
 from dataclasses import asdict
 from pathlib import Path
 
+from .aspect import Aspect
 from .style import AnimationStyle, CaptionFormatting
 
 
@@ -22,6 +23,7 @@ def save_settings(
     model_label: str,
     force_cpu: bool,
     last_directory: str | None = None,
+    aspect: Aspect = Aspect.AUTO,
 ) -> None:
     path = settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -32,6 +34,7 @@ def save_settings(
         "model_label": model_label,
         "force_cpu": force_cpu,
         "last_directory": last_directory or "",
+        "aspect": aspect.value,
     }
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -50,6 +53,7 @@ def load_settings() -> dict | None:
             "model_label": data.get("model_label", ""),
             "force_cpu": bool(data.get("force_cpu", False)),
             "last_directory": data.get("last_directory", ""),
+            "aspect": Aspect(data.get("aspect", Aspect.AUTO.value)),
         }
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         return None

@@ -122,9 +122,14 @@ def burn_captions(
     ass_path: str,
     output_path: str,
     info: VideoInfo,
+    canvas: tuple[int, int] | None = None,
 ) -> None:
     """Burns the .ass captions into the video, re-encoding at a bitrate
-    matched to the source so exported quality stays close to the original."""
+    matched to the source so exported quality stays close to the original.
+
+    `canvas` pads the source into a different target aspect before the
+    captions are drawn, matching what the preview shows.
+    """
     ass_escaped = _escape_filter_path(ass_path)
     target_bitrate = info.bit_rate or int(info.width * info.height * info.fps * 0.08)
 
@@ -134,9 +139,16 @@ def burn_captions(
     if font_files():
         ass_filter += f":fontsdir='{_escape_filter_path(app_fonts_dir())}'"
 
+    filters = []
+    if canvas and canvas != (info.width, info.height):
+        cw, ch = canvas
+        filters.append(f"scale={cw}:{ch}:force_original_aspect_ratio=decrease")
+        filters.append(f"pad={cw}:{ch}:(ow-iw)/2:(oh-ih)/2:black")
+    filters.append(ass_filter)
+
     cmd = [
         ffmpeg_path(), "-y", "-i", video_path,
-        "-vf", ass_filter,
+        "-vf", ",".join(filters),
         "-c:v", "libx264", "-preset", "medium",
         "-b:v", str(target_bitrate), "-maxrate", str(int(target_bitrate * 1.5)),
         "-bufsize", str(int(target_bitrate * 2)),

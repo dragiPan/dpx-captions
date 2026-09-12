@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import ffmpeg_util
+from .aspect import Aspect, canvas_size
 from .caption_builder import CaptionCard, build_captions
 from .gpu import ComputeBackend, detect_compute_backend
 from .style import AnimationStyle, CaptionFormatting
@@ -69,6 +70,7 @@ def export_video(
     style: AnimationStyle,
     video_info: ffmpeg_util.VideoInfo,
     output_path: str,
+    aspect: Aspect = Aspect.AUTO,
 ) -> str:
     if not ffmpeg_util.supports_ass_filter():
         raise RuntimeError(
@@ -79,10 +81,12 @@ def export_video(
 
     from .ass_writer import write_ass
 
+    canvas = canvas_size(video_info.width, video_info.height, aspect)
+
     tmp_dir = Path(tempfile.gettempdir()) / "captions_app"
     tmp_dir.mkdir(exist_ok=True)
     ass_path = tmp_dir / (Path(video_path).stem + ".ass")
-    write_ass(cards, style, video_info.width, video_info.height, ass_path)
+    write_ass(cards, style, canvas[0], canvas[1], ass_path)
 
-    ffmpeg_util.burn_captions(video_path, str(ass_path), output_path, video_info)
+    ffmpeg_util.burn_captions(video_path, str(ass_path), output_path, video_info, canvas)
     return output_path
