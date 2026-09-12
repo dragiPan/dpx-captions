@@ -113,6 +113,10 @@ def extract_audio(video_path: str, output_wav_path: str) -> str:
     return output_wav_path
 
 
+def _escape_filter_path(path: str | Path) -> str:
+    return str(Path(path).resolve()).replace("\\", "/").replace(":", "\\:")
+
+
 def burn_captions(
     video_path: str,
     ass_path: str,
@@ -121,12 +125,18 @@ def burn_captions(
 ) -> None:
     """Burns the .ass captions into the video, re-encoding at a bitrate
     matched to the source so exported quality stays close to the original."""
-    ass_escaped = str(Path(ass_path).resolve()).replace("\\", "/").replace(":", "\\:")
+    ass_escaped = _escape_filter_path(ass_path)
     target_bitrate = info.bit_rate or int(info.width * info.height * info.fps * 0.08)
+
+    from .fonts import app_fonts_dir, font_files
+
+    ass_filter = f"ass='{ass_escaped}'"
+    if font_files():
+        ass_filter += f":fontsdir='{_escape_filter_path(app_fonts_dir())}'"
 
     cmd = [
         ffmpeg_path(), "-y", "-i", video_path,
-        "-vf", f"ass='{ass_escaped}'",
+        "-vf", ass_filter,
         "-c:v", "libx264", "-preset", "medium",
         "-b:v", str(target_bitrate), "-maxrate", str(int(target_bitrate * 1.5)),
         "-bufsize", str(int(target_bitrate * 2)),

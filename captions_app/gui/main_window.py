@@ -21,12 +21,15 @@ from PySide6.QtWidgets import (
 
 from ..core import ffmpeg_util
 from ..core.gpu import detect_compute_backend
+from ..core.settings import load_settings, save_settings
 from ..core.transcribe import MODEL_SIZES
 from .caption_editor import CaptionEditorWidget
 from .style_panel import StylePanel
 from .timeline_widget import TimelineWidget
 from .video_preview import VideoPreviewWidget
-from .workers import ExportWorker, GenerateWorker, run_in_thread
+from .workers import ExportWorker, GenerateWorker, WaveformWorker, run_in_thread
+
+TIMELINE_SCROLL_HEIGHT = 160
 
 
 class MainWindow(QWidget):
@@ -38,10 +41,13 @@ class MainWindow(QWidget):
         self.video_path: str | None = None
         self.video_info = None
         self.cards: list = []
+        self.last_directory = ""
         self.generate_thread = None
         self.generate_worker = None
         self.export_thread = None
         self.export_worker = None
+        self.waveform_thread = None
+        self.waveform_worker = None
 
         root = QHBoxLayout(self)
         splitter = QSplitter(Qt.Horizontal)
@@ -52,6 +58,7 @@ class MainWindow(QWidget):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
 
+        self._restore_settings()
         self._check_ffmpeg()
 
     # --------------------------------------------------------------- Left side
@@ -133,13 +140,38 @@ class MainWindow(QWidget):
         self.video_preview.position_changed.connect(self._on_preview_position_changed)
         layout.addWidget(self.video_preview, 2)
 
+        tools = QHBoxLayout()
+        self.split_btn = QPushButton("Cut at playhead (Ctrl+B)")
+        self.split_btn.clicked.connect(lambda: self.timeline.split_at_playhead())
+        self.delete_card_btn = QPushButton("Delete (Del)")
+        self.delete_card_btn.clicked.connect(lambda: self.timeline.delete_selected())
+        zoom_out_btn = QPushButton("−")
+        zoom_out_btn.setFixedWidth(32)
+        zoom_out_btn.clicked.connect(lambda: self.timeline.zoom_by(1 / 1.3))
+        zoom_in_btn = QPushButton("+")
+        zoom_in_btn.setFixedWidth(32)
+        zoom_in_btn.clicked.connect(lambda: self.timeline.zoom_by(1.3))
+        fit_btn = QPushButton("Fit")
+        fit_btn.setFixedWidth(48)
+        fit_btn.clicked.connect(lambda: self.timeline.zoom_fit())
+        for widget in (self.split_btn, self.delete_card_btn):
+            tools.addWidget(widget)
+        tools.addStretch(1)
+        tools.addWidget(QLabel("Zoom"))
+        for widget in (zoom_out_btn, zoom_in_btn, fit_btn):
+            tools.addWidget(widget)
+        layout.addLayout(tools)
+
         timeline_scroll = QScrollArea()
-        timeline_scroll.setWidgetResizable(True)
-        timeline_scroll.setFixedHeight(110)
+        timeline_scroll.setWidgetResizable(False)
+        timeline_scroll.setFixedHeight(TIMELINE_SCROLL_HEIGHT)
+        timeline_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.timeline = TimelineWidget()
         self.timeline.cards_changed.connect(self._on_timeline_cards_changed)
         self.timeline.seek_requested.connect(self.video_preview.seek)
         self.timeline.card_selected.connect(self._on_timeline_card_selected)
+        self.timeline.play_pause_requested.connect(self.video_preview.toggle_play)
         timeline_scroll.setWidget(self.timeline)
         layout.addWidget(timeline_scroll)
 
@@ -172,14 +204,25 @@ class MainWindow(QWidget):
 
     def _on_choose_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Choose Video", "", "Video Files (*.mp4 *.mov *.mkv *.avi)"
+            self, "Choose Video", self.last_directory, "Video Files (*.mp4 *.mov *.mkv *.avi)"
         )
         if not path:
             return
         self.video_path = path
+        self.last_directory = str(Path(path).parent)
         self.source_label.setText(Path(path).name)
         self.generate_btn.setEnabled(True)
         self.video_preview.load_video(path)
+
+        self.video_info = ffmpeg_util.probe(path)
+        self.timeline.set_duration(self.video_info.duration)
+        self.video_preview.set_style(self.style_panel.style)
+        self._load_waveform(path)
+
+    def _load_waveform(self, path: str) -> None:
+        self.waveform_worker = WaveformWorker(path)
+        self.waveform_worker.finished.connect(self.timeline.set_peaks)
+        self.waveform_thread = run_in_thread(self.waveform_worker)
 
     def _on_generate_clicked(self) -> None:
         if not self.video_path:
@@ -241,6 +284,31 @@ class MainWindow(QWidget):
 
     def _on_style_or_formatting_changed(self) -> None:
         self.video_preview.set_style(self.style_panel.style)
+
+    # --------------------------------------------------------------- settings
+    def _restore_settings(self) -> None:
+        saved = load_settings()
+        if not saved:
+            return
+        self.style_panel.apply_settings(saved["style"], saved["formatting"])
+        if saved["model_label"] in MODEL_SIZES:
+            self.model_combo.setCurrentText(saved["model_label"])
+        self.force_cpu_check.setChecked(saved["force_cpu"])
+        self.last_directory = saved["last_directory"]
+        self.video_preview.set_style(self.style_panel.style)
+
+    def _save_settings(self) -> None:
+        save_settings(
+            self.style_panel.style,
+            self.style_panel.formatting,
+            self.model_combo.currentText(),
+            self.force_cpu_check.isChecked(),
+            self.last_directory,
+        )
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._save_settings()
+        super().closeEvent(event)
 
     def _on_export_clicked(self) -> None:
         if not self.video_path or not self.video_info:

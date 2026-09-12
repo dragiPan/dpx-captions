@@ -37,6 +37,23 @@ class GenerateWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class WaveformWorker(QObject):
+    finished = Signal(object)  # numpy array of peaks
+    failed = Signal(str)
+
+    def __init__(self, video_path: str):
+        super().__init__()
+        self.video_path = video_path
+
+    def run(self) -> None:
+        try:
+            from ..core.waveform import compute_peaks
+
+            self.finished.emit(compute_peaks(self.video_path))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class ExportWorker(QObject):
     finished = Signal(str)
     failed = Signal(str)

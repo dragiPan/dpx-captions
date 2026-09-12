@@ -1,33 +1,23 @@
-"""Playable video preview with a live-rendered caption overlay.
+"""Playable video preview with captions drawn on top of the decoded frame.
 
-The overlay re-implements the same word-fill/outline/shadow/entrance-
-animation logic as ass_writer.py, but with QPainter instead of libass, so
-scrubbing/playing here is a faithful (if not pixel-identical) preview of
-what Export will actually burn in.
+Frames are pulled through a QVideoSink and painted manually rather than
+using QVideoWidget: on Windows QVideoWidget owns a native window, so any
+overlay widget stacked above it is not composited and the captions stay
+invisible. Painting the frame and the captions in one paintEvent also lets
+us position captions against the real video rect instead of the widget's
+letterboxed bounds.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QUrl, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtMultimediaWidgets import QVideoWidget
-from PySide6.QtWidgets import (
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QSlider,
-    QStackedLayout,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtCore import QRect, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider, QVBoxLayout, QWidget
 
 from ..core.caption_builder import CaptionCard
 from ..core.style import AnimationStyle
-
-
-def _qcolor(r: float, g: float, b: float) -> QColor:
-    return QColor(round(r * 255), round(g * 255), round(b * 255))
+from .caption_render import draw_captions
 
 
 def _fmt_time(seconds: float) -> str:
@@ -36,117 +26,43 @@ def _fmt_time(seconds: float) -> str:
     return f"{m}:{s:02d}"
 
 
-class CaptionOverlay(QWidget):
+class _VideoSurface(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumHeight(240)
+        self._image: QImage | None = None
         self.cards: list[CaptionCard] = []
         self.style = AnimationStyle()
         self.current_time = 0.0
 
-    def set_cards(self, cards: list[CaptionCard]) -> None:
-        self.cards = cards
-        self.update()
-
-    def set_style(self, style: AnimationStyle) -> None:
-        self.style = style
+    def set_frame(self, image: QImage, t: float) -> None:
+        self._image = image
+        self.current_time = t
         self.update()
 
     def set_time(self, t: float) -> None:
         self.current_time = t
         self.update()
 
-    def _active_card(self) -> CaptionCard | None:
-        for c in self.cards:
-            if c.start <= self.current_time <= c.end:
-                return c
-        return None
+    def video_rect(self) -> QRect:
+        if self._image is None or self._image.isNull():
+            return self.rect()
+        iw, ih = self._image.width(), self._image.height()
+        if iw <= 0 or ih <= 0:
+            return self.rect()
+        scale = min(self.width() / iw, self.height() / ih)
+        w, h = round(iw * scale), round(ih * scale)
+        return QRect((self.width() - w) // 2, (self.height() - h) // 2, w, h)
 
-    def paintEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        card = self._active_card()
-        if card is None:
-            return
-
-        style = self.style
-        w, h = self.width(), self.height()
-        if w <= 0 or h <= 0:
-            return
-
-        font = QFont(style.Font)
-        font_px = max(1, round(style.TextSize * h))
-        font.setPixelSize(font_px)
-        font.setBold("bold" in style.Style.lower())
-        font.setItalic("italic" in style.Style.lower())
-        metrics = QFontMetrics(font)
-        line_height = metrics.height()
-
-        x_center = style.TextPosition[0] * w
-        y_center = (1.0 - style.TextPosition[1]) * h
-        local_t = self.current_time - card.start
-        anim_len = max(style.AnimationLength, 1e-6)
-        progress = max(0.0, min(local_t / anim_len, 1.0))
-
+    def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setRenderHint(QPainter.TextAntialiasing)
-
-        opacity = progress if style.FadeEnabled else 1.0
-        scale = (0.6 + 0.4 * progress) if style.PopInEnabled else 1.0
-        slide_offset = ((1.0 - progress) * 0.08 * h) if style.SlideUpEnabled else 0.0
-
-        painter.setOpacity(opacity)
-        painter.translate(x_center, y_center + slide_offset)
-        painter.scale(scale, scale)
-        painter.translate(-x_center, -y_center)
-
-        total_height = len(card.lines) * line_height
-        start_y = y_center - total_height / 2 + metrics.ascent()
-
-        fill_color = _qcolor(style.FillColorRed, style.FillColorGreen, style.FillColorBlue)
-        highlight_color = _qcolor(style.HighlightColorRed, style.HighlightColorGreen, style.HighlightColorBlue)
-        outline_color = _qcolor(style.OutlineColorRed, style.OutlineColorGreen, style.OutlineColorBlue)
-        shadow_color = _qcolor(style.ShadowColorRed, style.ShadowColorGreen, style.ShadowColorBlue)
-        outline_px = max(1.0, style.OutlineThickness * font_px) if style.OutlineEnabled else 0.0
-
-        for row, line in enumerate(card.lines):
-            baseline_y = start_y + row * line_height
-            space_w = metrics.horizontalAdvance(" ")
-            line_width = sum(metrics.horizontalAdvance(w_.text) for w_ in line) + space_w * max(len(line) - 1, 0)
-            word_x = x_center - line_width / 2
-
-            for word in line:
-                word_w = metrics.horizontalAdvance(word.text)
-                if local_t <= word.start - card.start:
-                    fraction = 0.0
-                elif local_t >= word.end - card.start:
-                    fraction = 1.0
-                else:
-                    fraction = (local_t - (word.start - card.start)) / max(word.end - word.start, 1e-6)
-
-                if style.ShadowEnabled:
-                    painter.setPen(shadow_color)
-                    painter.drawText(round(word_x + 2), round(baseline_y + 2), word.text)
-
-                if outline_px > 0:
-                    path = QPainterPath()
-                    path.addText(word_x, baseline_y, font, word.text)
-                    painter.strokePath(path, QPen(outline_color, outline_px))
-
-                painter.setFont(font)
-                painter.setPen(fill_color)
-                painter.drawText(round(word_x), round(baseline_y), word.text)
-
-                if fraction > 0:
-                    painter.save()
-                    clip_w = round(word_w * fraction)
-                    painter.setClipRect(round(word_x), round(baseline_y - metrics.ascent()), clip_w, line_height)
-                    painter.setPen(highlight_color)
-                    painter.drawText(round(word_x), round(baseline_y), word.text)
-                    painter.restore()
-
-                word_x += word_w + space_w
-
+        painter.fillRect(self.rect(), QColor(12, 12, 12))
+        if self._image is not None and not self._image.isNull():
+            rect = self.video_rect()
+            painter.setRenderHint(QPainter.SmoothPixmapTransform)
+            painter.drawImage(rect, self._image)
+            draw_captions(painter, rect, self.cards, self.style, self.current_time)
         painter.end()
 
 
@@ -161,29 +77,25 @@ class VideoPreviewWidget(QWidget):
         self.audio_output = QAudioOutput(self)
         self.player.setAudioOutput(self.audio_output)
 
-        self.video_widget = QVideoWidget()
-        self.player.setVideoOutput(self.video_widget)
+        self.video_sink = QVideoSink(self)
+        self.player.setVideoSink(self.video_sink)
+        self.video_sink.videoFrameChanged.connect(self._on_frame)
 
-        self.overlay = CaptionOverlay()
-
-        stack_container = QWidget()
-        stack = QStackedLayout(stack_container)
-        stack.setStackingMode(QStackedLayout.StackAll)
-        stack.addWidget(self.video_widget)
-        stack.addWidget(self.overlay)
+        self.surface = _VideoSurface()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(stack_container, 1)
+        layout.addWidget(self.surface, 1)
 
         controls = QHBoxLayout()
         self.play_btn = QPushButton("Play")
-        self.play_btn.clicked.connect(self._toggle_play)
+        self.play_btn.setFixedWidth(70)
+        self.play_btn.clicked.connect(self.toggle_play)
         controls.addWidget(self.play_btn)
 
         self.seek_slider = QSlider(Qt.Horizontal)
         self.seek_slider.setRange(0, 0)
-        self.seek_slider.sliderMoved.connect(self._on_slider_moved)
+        self.seek_slider.sliderMoved.connect(lambda ms: self.player.setPosition(ms))
         controls.addWidget(self.seek_slider, 1)
 
         self.time_label = QLabel("0:00 / 0:00")
@@ -196,38 +108,52 @@ class VideoPreviewWidget(QWidget):
 
         self._duration_s = 0.0
 
+    # -------------------------------------------------------------------- API
     def load_video(self, path: str) -> None:
         self.player.setSource(QUrl.fromLocalFile(path))
+        # Decode the first frame so the surface isn't blank before playback.
+        self.player.play()
+        self.player.pause()
+        self.player.setPosition(0)
 
     def set_cards(self, cards: list[CaptionCard]) -> None:
-        self.overlay.set_cards(cards)
+        self.surface.cards = cards
+        self.surface.update()
 
     def set_style(self, style: AnimationStyle) -> None:
-        self.overlay.set_style(style)
+        self.surface.style = style
+        self.surface.update()
 
     def seek(self, seconds: float) -> None:
         self.player.setPosition(round(seconds * 1000))
+        self.surface.set_time(seconds)
 
-    def _toggle_play(self) -> None:
+    def toggle_play(self) -> None:
         if self.player.playbackState() == QMediaPlayer.PlayingState:
             self.player.pause()
         else:
             self.player.play()
 
+    # ----------------------------------------------------------------- events
+    def _on_frame(self, frame) -> None:
+        if not frame.isValid():
+            return
+        image = frame.toImage()
+        if image.isNull():
+            return
+        start_us = frame.startTime()
+        t = start_us / 1_000_000.0 if start_us >= 0 else self.player.position() / 1000.0
+        self.surface.set_frame(image, t)
+        self.position_changed.emit(t)
+
     def _on_playback_state_changed(self, state) -> None:
         self.play_btn.setText("Pause" if state == QMediaPlayer.PlayingState else "Play")
 
-    def _on_slider_moved(self, value: int) -> None:
-        self.player.setPosition(value)
-
     def _on_position_changed(self, position_ms: int) -> None:
-        t = position_ms / 1000.0
-        self.overlay.set_time(t)
         self.seek_slider.blockSignals(True)
         self.seek_slider.setValue(position_ms)
         self.seek_slider.blockSignals(False)
-        self.time_label.setText(f"{_fmt_time(t)} / {_fmt_time(self._duration_s)}")
-        self.position_changed.emit(t)
+        self.time_label.setText(f"{_fmt_time(position_ms / 1000.0)} / {_fmt_time(self._duration_s)}")
 
     def _on_duration_changed(self, duration_ms: int) -> None:
         self._duration_s = duration_ms / 1000.0

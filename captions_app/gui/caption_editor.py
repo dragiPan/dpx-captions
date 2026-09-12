@@ -10,10 +10,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QDoubleSpinBox,
     QHBoxLayout,
     QHeaderView,
     QPushButton,
@@ -108,19 +107,13 @@ class CaptionEditorWidget(QWidget):
         self.table.blockSignals(False)
 
     def _populate_row(self, row: int, card: CaptionCard) -> None:
-        start_spin = QDoubleSpinBox()
-        start_spin.setRange(0, 100000)
-        start_spin.setDecimals(2)
-        start_spin.setValue(card.start)
-        start_spin.valueChanged.connect(lambda v, r=row: self._on_time_changed(r, "start", v))
-        self.table.setCellWidget(row, COL_START, start_spin)
-
-        end_spin = QDoubleSpinBox()
-        end_spin.setRange(0, 100000)
-        end_spin.setDecimals(2)
-        end_spin.setValue(card.end)
-        end_spin.valueChanged.connect(lambda v, r=row: self._on_time_changed(r, "end", v))
-        self.table.setCellWidget(row, COL_END, end_spin)
+        # Times are read-only here on purpose: they're edited by dragging on
+        # the timeline, and editable spin boxes were being changed by stray
+        # mouse-wheel scrolls over the list.
+        for col, value in ((COL_START, card.start), (COL_END, card.end)):
+            item = QTableWidgetItem(f"{value:.2f}")
+            item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+            self.table.setItem(row, col, item)
 
         text_item = QTableWidgetItem(_card_text(card))
         self.table.setItem(row, COL_TEXT, text_item)
@@ -137,13 +130,6 @@ class CaptionEditorWidget(QWidget):
         if row >= len(self.cards):
             return
         self.cards[row] = rebuild_card_text(self.cards[row], item.text(), self.formatting)
-        self.cards_changed.emit()
-
-    def _on_time_changed(self, row: int, which: str, value: float) -> None:
-        if row >= len(self.cards):
-            return
-        card = self.cards[row]
-        self.cards[row] = replace(card, **{which: value})
         self.cards_changed.emit()
 
     def _selected_rows(self) -> list[int]:
