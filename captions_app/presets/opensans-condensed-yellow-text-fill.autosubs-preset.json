@@ -1,0 +1,42 @@
+{
+  "description": "OpenSans Condensed Bold, 0.1 size, text color fill highlight where the word itself changes color.",
+  "macroSettings": {
+    "AnimationLength": 0.2,
+    "OutlineColorGreen": 0,
+    "OutlineColorRed": 0,
+    "OutlineEnabled": 1,
+    "AnimationLevel": 0,
+    "AnimationMode": 0,
+    "Style": "Bold",
+    "PopInEnabled": 0,
+    "FillColorBlue": 1,
+    "ShadowColorGreen": 0,
+    "ShadowColorRed": 0,
+    "FillColorGreen": 1,
+    "SlideUpEnabled": 0,
+    "FillEnabled": 1,
+    "OutlineColorBlue": 0,
+    "HighlightStyle": 0,
+    "TextPosition": [
+      0.5,
+      0.2,
+      0
+    ],
+    "HighlightColorBlue": 0.164,
+    "ShadowColorBlue": 0,
+    "ShadowEnabled": 1,
+    "HighlightColorGreen": 1,
+    "HighlightColorRed": 1,
+    "HighlightEnabled": 1,
+    "TextSize": 0.1,
+    "OutlineThickness": 0.08,
+    "FillColorRed": 1,
+    "HighlightExtendHorizontal": -0.04,
+    "FadeEnabled": 0,
+    "HighlightExtendVertical": 0,
+    "HighlightRound": 0,
+    "Font": "Open Sans Condensed"
+  },
+  "name": "OpenSans Condensed Yellow Text Fill",
+  "version": 1
+}

@@ -1,0 +1,23 @@
+[project]
+name = "captions-app"
+version = "0.1.0"
+description = "Standalone caption generation and editing app for fitness content (Serbian Latin transcription + animated captions)"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.7",
+    "faster-whisper>=1.0.3",
+    "imageio-ffmpeg>=0.5.1",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pyinstaller>=6.10",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["captions_app*"]
