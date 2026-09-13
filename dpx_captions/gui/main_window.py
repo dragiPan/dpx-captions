@@ -3,24 +3,30 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
     QSplitter,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from ..core import ffmpeg_util
 from ..core.gpu import detect_compute_backend
+from ..core.history import History
 from ..core.settings import load_settings, save_settings
 from ..core.transcribe import MODEL_SIZES
 from .caption_editor import CaptionEditorWidget
@@ -48,6 +54,8 @@ class MainWindow(QWidget):
         self.export_worker = None
         self.waveform_thread = None
         self.waveform_worker = None
+        self.history = History()
+        self._applying_history = False
 
         root = QHBoxLayout(self)
         splitter = QSplitter(Qt.Horizontal)
@@ -58,8 +66,19 @@ class MainWindow(QWidget):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
 
+        self._install_shortcuts()
         self._restore_settings()
         self._check_ffmpeg()
+
+    def _install_shortcuts(self) -> None:
+        for sequence, handler in (
+            (QKeySequence.Undo, self._on_undo),
+            (QKeySequence.Redo, self._on_redo),
+            (QKeySequence("Ctrl+Y"), self._on_redo),
+        ):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.WindowShortcut)
+            shortcut.activated.connect(handler)
 
     # --------------------------------------------------------------- Left side
     def _build_left_panel(self) -> QWidget:
@@ -149,6 +168,15 @@ class MainWindow(QWidget):
         layout.addWidget(self.video_preview, 2)
 
         tools = QHBoxLayout()
+        self.undo_btn = QPushButton("Undo")
+        self.undo_btn.setEnabled(False)
+        self.undo_btn.clicked.connect(self._on_undo)
+        self.redo_btn = QPushButton("Redo")
+        self.redo_btn.setEnabled(False)
+        self.redo_btn.clicked.connect(self._on_redo)
+        tools.addWidget(self.undo_btn)
+        tools.addWidget(self.redo_btn)
+
         self.split_btn = QPushButton("Cut at playhead (Ctrl+B)")
         self.split_btn.clicked.connect(lambda: self.timeline.split_at_playhead())
         self.delete_card_btn = QPushButton("Delete (Del)")
@@ -263,6 +291,8 @@ class MainWindow(QWidget):
     def _on_generate_finished(self, result) -> None:
         self.video_info = result.video_info
         self.cards = result.cards
+        self.history.reset(self.cards)
+        self._update_history_buttons()
         self._push_cards_everywhere()
         self.timeline.set_duration(result.video_info.duration)
         self.video_preview.set_style(self.style_panel.style)
@@ -284,12 +314,56 @@ class MainWindow(QWidget):
         self.video_preview.set_cards(self.cards)
 
     def _on_editor_cards_changed(self) -> None:
+        if self._applying_history:
+            return
         self.cards = self.caption_editor.cards
+        self.history.record(self.cards)
         self._push_cards_everywhere(skip="editor")
+        self._update_history_buttons()
 
     def _on_timeline_cards_changed(self) -> None:
+        if self._applying_history:
+            return
         self.cards = self.timeline.cards
+        self.history.record(self.cards)
         self._push_cards_everywhere(skip="timeline")
+        self._update_history_buttons()
+
+    # ---------------------------------------------------------------- history
+    def _on_undo(self) -> None:
+        if self._delegate_to_focused_editor("undo"):
+            return
+        self._apply_history(self.history.undo())
+
+    def _on_redo(self) -> None:
+        if self._delegate_to_focused_editor("redo"):
+            return
+        self._apply_history(self.history.redo())
+
+    @staticmethod
+    def _delegate_to_focused_editor(action: str) -> bool:
+        """Lets a focused text field handle its own undo/redo, so editing a
+        caption's text doesn't get rolled back by the timeline's history."""
+        widget = QApplication.focusWidget()
+        if isinstance(widget, (QLineEdit, QPlainTextEdit, QTextEdit)):
+            getattr(widget, action)()
+            return True
+        return False
+
+    def _apply_history(self, cards) -> None:
+        if cards is None:
+            return
+        self._applying_history = True
+        try:
+            self.cards = cards
+            self._push_cards_everywhere()
+        finally:
+            self._applying_history = False
+        self._update_history_buttons()
+
+    def _update_history_buttons(self) -> None:
+        self.undo_btn.setEnabled(self.history.can_undo())
+        self.redo_btn.setEnabled(self.history.can_redo())
 
     def _on_timeline_card_selected(self, index: int) -> None:
         self.caption_editor.select_row(index)
