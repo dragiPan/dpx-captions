@@ -19,8 +19,9 @@ radi nad već eksportovanim klipom.
 - **Kompatibilnost sa AutoSubs presetima** — `.autosubs-preset.json` fajlovi se učitavaju
   direktno
 - **Timeline editor** — waveform, prevlačenje, skraćivanje, sečenje i overwrite kao u
-  pravom editoru
+  pravom editoru, sa undo/redo
 - **Aspect ratio** — Auto / 9:16 / 16:9 / 1:1 / 4:5, sa istim kadriranjem u preview-u i exportu
+- **Safe-area vodilice** — pokazuju gde TikTok/Reels/Shorts interfejs prekriva kadar
 
 ## Zahtevi
 
@@ -124,17 +125,29 @@ Timeline (ispod preview-a):
 | Zoom | `Ctrl` + točkić (drži tačku pod kursorom) |
 | Horizontalno skrolovanje | `Alt` + točkić |
 | Pomeranje playhead-a | klik na lenjir ili waveform |
+| Poništi / ponovi | `Ctrl+Z` / `Ctrl+Y` |
 
 Na granici dva bloka hvata se onaj sa čije strane je kursor.
 
 U tabeli **Subtitles** se ispravlja tekst; vremena se menjaju isključivo na timeline-u.
 **Add Card** ubacuje novi titl na poziciju playhead-a.
 
+**Find & Replace** menja reč kroz sve titlove odjednom — korisno kada model dosledno
+pogreši isti termin. Tajming reči ostaje netaknut.
+
+Dugme **Guides** u preview-u uključuje safe-area vodilice (podrazumevano isključene).
+Crveno su zone koje prekriva interfejs mreže, žuti okvir je siguran prostor.
+
 ### 6. Export
 
 **Export Video with Captions** ugrađuje titlove kroz ffmpeg, sa bitrate-om
 prilagođenim izvoru. Ako je izabran aspect ratio različit od izvornog, video se skalira
 i dopunjava crnim trakama do tog formata.
+
+## Projekti
+
+**Save Project...** snima sve — putanju do klipa, stil, opcije i sve izmenjene titlove —
+u `.dpxproj` fajl. **Open Project...** vraća sesiju bez ponovnog transkribovanja.
 
 ## Podešavanja
 
@@ -143,6 +156,18 @@ Stil, opcije, izabrani model i aspect ratio se pamte između sesija u:
 ```
 %APPDATA%\DPX Captions\settings.json
 ```
+
+## Pravljenje .exe verzije
+
+Za samostalnu verziju koju prebacuješ na drugi računar bez instaliranja Python-a:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build_exe.ps1
+```
+
+Rezultat je `dist\DPX Captions\` — prekopiraj **ceo folder**, ne samo `.exe`. Na tom
+računaru i dalje treba ffmpeg sa libass. Whisper model se skida pri prvom pokretanju,
+pa je za prvo pokretanje potreban internet.
 
 ## Ograničenja
 

@@ -14,7 +14,7 @@ different ratio.
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, QSizeF, Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
@@ -39,6 +39,12 @@ from .caption_render import draw_captions
 # timeline 60 times a second is pure waste.
 PLAYHEAD_EMIT_INTERVAL = 1 / 15
 
+# Fractions of the frame that short-form interfaces cover: status bar and
+# search at the top, caption/username at the bottom, action buttons right.
+TOP_UNSAFE = 0.07
+BOTTOM_UNSAFE = 0.18
+RIGHT_UNSAFE = 0.12
+
 
 def _fmt_time(seconds: float) -> str:
     m = int(seconds // 60)
@@ -54,6 +60,11 @@ class _CaptionItem(QGraphicsItem):
         self.cards: list[CaptionCard] = []
         self.style = AnimationStyle()
         self.current_time = 0.0
+        self.show_guides = False
+
+    def set_guides(self, enabled: bool) -> None:
+        self.show_guides = enabled
+        self.update()
 
     def set_canvas(self, width: float, height: float) -> None:
         self.prepareGeometryChange()
@@ -68,7 +79,28 @@ class _CaptionItem(QGraphicsItem):
         return self._rect
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
+        if self.show_guides:
+            self._paint_guides(painter)
         draw_captions(painter, self._rect.toRect(), self.cards, self.style, self.current_time)
+
+    def _paint_guides(self, painter: QPainter) -> None:
+        """Shades the zones the TikTok/Reels/Shorts interface covers."""
+        w, h = self._rect.width(), self._rect.height()
+        shade = QColor(220, 60, 60, 55)
+        for zone in (
+            QRectF(0, 0, w, h * TOP_UNSAFE),
+            QRectF(0, h * (1 - BOTTOM_UNSAFE), w, h * BOTTOM_UNSAFE),
+            QRectF(w * (1 - RIGHT_UNSAFE), 0, w * RIGHT_UNSAFE, h),
+        ):
+            painter.fillRect(zone, shade)
+
+        pen = QPen(QColor(255, 210, 80, 200), max(1.0, h * 0.002))
+        pen.setStyle(Qt.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(
+            QRectF(0, h * TOP_UNSAFE, w * (1 - RIGHT_UNSAFE), h * (1 - TOP_UNSAFE - BOTTOM_UNSAFE))
+        )
 
 
 class VideoPreviewWidget(QWidget):
@@ -117,6 +149,12 @@ class VideoPreviewWidget(QWidget):
 
         self.time_label = QLabel("0:00 / 0:00")
         controls.addWidget(self.time_label)
+
+        self.guides_btn = QPushButton("Guides")
+        self.guides_btn.setCheckable(True)
+        self.guides_btn.setToolTip("Show the areas the TikTok/Reels/Shorts interface covers")
+        self.guides_btn.toggled.connect(self.caption_item.set_guides)
+        controls.addWidget(self.guides_btn)
 
         controls.addWidget(QLabel("Aspect"))
         self.aspect_combo = QComboBox()

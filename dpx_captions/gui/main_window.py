@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -27,9 +28,11 @@ from PySide6.QtWidgets import (
 from ..core import ffmpeg_util
 from ..core.gpu import detect_compute_backend
 from ..core.history import History
+from ..core.project import PROJECT_SUFFIX, load_project, save_project
 from ..core.settings import load_settings, save_settings
 from ..core.transcribe import MODEL_SIZES
 from .caption_editor import CaptionEditorWidget
+from .find_replace import FindReplaceDialog, replace_in_cards
 from .style_panel import StylePanel
 from .timeline_widget import TimelineWidget
 from .video_preview import VideoPreviewWidget
@@ -125,6 +128,16 @@ class MainWindow(QWidget):
         pick_btn.clicked.connect(self._on_choose_video)
         row.addWidget(pick_btn)
         layout.addLayout(row)
+
+        project_row = QHBoxLayout()
+        open_btn = QPushButton("Open Project...")
+        open_btn.clicked.connect(self._on_open_project)
+        save_btn = QPushButton("Save Project...")
+        save_btn.clicked.connect(self._on_save_project)
+        project_row.addWidget(open_btn)
+        project_row.addWidget(save_btn)
+        layout.addLayout(project_row)
+
         layout.addWidget(self.source_label)
 
         self.source_info_label = QLabel("")
@@ -181,6 +194,8 @@ class MainWindow(QWidget):
         self.split_btn.clicked.connect(lambda: self.timeline.split_at_playhead())
         self.delete_card_btn = QPushButton("Delete (Del)")
         self.delete_card_btn.clicked.connect(lambda: self.timeline.delete_selected())
+        self.find_btn = QPushButton("Find && Replace")
+        self.find_btn.clicked.connect(self._on_find_replace)
         zoom_out_btn = QPushButton("−")
         zoom_out_btn.setFixedWidth(32)
         zoom_out_btn.clicked.connect(lambda: self.timeline.zoom_by(1 / 1.3))
@@ -190,7 +205,7 @@ class MainWindow(QWidget):
         fit_btn = QPushButton("Fit")
         fit_btn.setFixedWidth(48)
         fit_btn.clicked.connect(lambda: self.timeline.zoom_fit())
-        for widget in (self.split_btn, self.delete_card_btn):
+        for widget in (self.split_btn, self.delete_card_btn, self.find_btn):
             tools.addWidget(widget)
         tools.addStretch(1)
         tools.addWidget(QLabel("Zoom"))
@@ -246,6 +261,9 @@ class MainWindow(QWidget):
         )
         if not path:
             return
+        self._load_video(path)
+
+    def _load_video(self, path: str) -> None:
         self.video_path = path
         self.last_directory = str(Path(path).parent)
         self.source_label.setText(Path(path).name)
@@ -378,6 +396,81 @@ class MainWindow(QWidget):
 
     def _on_style_or_formatting_changed(self) -> None:
         self.video_preview.set_style(self.style_panel.style)
+
+    # ---------------------------------------------------------------- project
+    def _on_save_project(self) -> None:
+        if not self.video_path:
+            QMessageBox.information(self, "Nothing to save", "Load a video first.")
+            return
+        default = str(Path(self.video_path).with_suffix(PROJECT_SUFFIX))
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Project", default, f"DPX Captions project (*{PROJECT_SUFFIX})"
+        )
+        if not path:
+            return
+        save_project(
+            path, self.video_path, MODEL_SIZES[self.model_combo.currentText()],
+            self.style_panel.formatting, self.style_panel.style, self.cards,
+            self.video_preview.aspect(),
+        )
+
+    def _on_open_project(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Project", self.last_directory, f"DPX Captions project (*{PROJECT_SUFFIX})"
+        )
+        if not path:
+            return
+
+        try:
+            data = load_project(path)
+        except (OSError, ValueError, KeyError) as exc:
+            QMessageBox.critical(self, "Could not open project", str(exc))
+            return
+
+        video_path = data["video_path"]
+        if not Path(video_path).exists():
+            QMessageBox.warning(
+                self, "Video not found",
+                f"The project refers to a video that isn't there any more:\n{video_path}\n\n"
+                "Captions were loaded; pick the video again to preview or export.",
+            )
+        else:
+            self._load_video(video_path)
+
+        self.style_panel.apply_settings(data["style"], data["formatting"])
+        self.video_preview.set_aspect(data["aspect"])
+        for label, size in MODEL_SIZES.items():
+            if size == data["model_size"]:
+                self.model_combo.setCurrentText(label)
+
+        self.cards = data["cards"]
+        self.history.reset(self.cards)
+        self._update_history_buttons()
+        self._push_cards_everywhere()
+        self.export_btn.setEnabled(bool(self.video_info))
+
+    # ----------------------------------------------------------- find/replace
+    def _on_find_replace(self) -> None:
+        if not self.cards:
+            QMessageBox.information(self, "No captions", "Generate captions first.")
+            return
+
+        dialog = FindReplaceDialog(self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        count = replace_in_cards(
+            self.cards,
+            dialog.find_edit.text(),
+            dialog.replace_edit.text(),
+            dialog.match_case.isChecked(),
+            dialog.whole_word.isChecked(),
+        )
+        if count:
+            self.history.record(self.cards)
+            self._update_history_buttons()
+            self._push_cards_everywhere()
+        QMessageBox.information(self, "Find and replace", f"Replaced {count} occurrence(s).")
 
     # --------------------------------------------------------------- settings
     def _restore_settings(self) -> None:

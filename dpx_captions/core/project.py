@@ -8,6 +8,7 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
+from .aspect import Aspect
 from .caption_builder import CaptionCard
 from .style import AnimationStyle, CaptionFormatting
 from .transcribe import Word
@@ -32,6 +33,9 @@ def cards_from_dict(data: list[dict]) -> list[CaptionCard]:
     return cards
 
 
+PROJECT_SUFFIX = ".dpxproj"
+
+
 def save_project(
     path: str | Path,
     video_path: str,
@@ -39,6 +43,7 @@ def save_project(
     formatting: CaptionFormatting,
     style: AnimationStyle,
     cards: list[CaptionCard],
+    aspect: Aspect = Aspect.AUTO,
 ) -> None:
     data = {
         "version": 1,
@@ -46,6 +51,7 @@ def save_project(
         "model_size": model_size,
         "formatting": formatting.to_dict(),
         "style": asdict(style),
+        "aspect": aspect.value,
         "cards": cards_to_dict(cards),
     }
     Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -53,10 +59,13 @@ def save_project(
 
 def load_project(path: str | Path) -> dict:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
+    known_style = {f for f in AnimationStyle.__dataclass_fields__}
+    style_data = {k: v for k, v in data["style"].items() if k in known_style}
     return {
         "video_path": data["video_path"],
         "model_size": data["model_size"],
         "formatting": CaptionFormatting.from_dict(data["formatting"]),
-        "style": AnimationStyle(**data["style"]),
+        "style": AnimationStyle(**style_data),
+        "aspect": Aspect(data.get("aspect", Aspect.AUTO.value)),
         "cards": cards_from_dict(data["cards"]),
     }
