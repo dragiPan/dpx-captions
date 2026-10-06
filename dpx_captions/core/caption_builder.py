@@ -19,7 +19,9 @@ _PUNCT = re.compile(r"[^\w\sÀ-ſ']", re.UNICODE)
 
 # (max_chars_per_line, max_lines, pause-break threshold in seconds or None)
 _DENSITY_PARAMS: dict[Density, tuple[int, int, float | None]] = {
-    Density.SINGLE_WORD: (999, 1, None),
+    # A one-character limit means any second word overflows the line, so every word gets its own card.
+    # (It used to be 999, which packed the entire transcript into a single card.)
+    Density.SINGLE_WORD: (1, 1, None),
     Density.STANDARD: (25, 1, 0.7),
     Density.MORE: (40, 2, 0.9),
 }

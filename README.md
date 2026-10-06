@@ -1,12 +1,105 @@
 # DPX Captions
 
-Desktop aplikacija za automatsko generisanje i ugrađivanje titlova u kratke video
-formate. Transkribuje srpski govor preko Whisper modela, grupiše ga u titlove po
-tvojim pravilima, omogućava izmene na timeline-u kao u video editoru, i eksportuje
-gotov video sa ugrađenim animiranim titlovima.
+Aplikacija za automatsko generisanje i ugrađivanje titlova u kratke video formate.
+Transkribuje srpski govor preko Whisper modela, grupiše ga u titlove po tvojim
+pravilima, omogućava izmene na timeline-u kao u video editoru, i eksportuje gotov
+video sa ugrađenim animiranim titlovima.
 
 Napravljena kao zamena za AutoSubs + DaVinci Resolve radni tok: ne zahteva Resolve,
 radi nad već eksportovanim klipom.
+
+Postoje dve verzije koje dele isti izgled titlova, iste AutoSubs preset fajlove i iste
+opcije:
+
+| | Gde | Opis |
+|---|---|---|
+| **Desktop** | Windows (Python + Qt) | ovaj deo README-a, od "Šta radi" nadalje |
+| **Android** | telefon (APK) | [vidi odeljak ispod](#android-aplikacija) |
+
+## Android aplikacija
+
+Ista funkcionalnost vezana za titlove, sa interfejsom prilagođenim telefonu i timeline-om
+u stilu CapCut-a (fiksni playhead u sredini, sadržaj klizi ispod njega). Nema video
+montaže — samo rad sa titlovima.
+
+### Šta radi
+
+- **Transkripcija na telefonu** (whisper.cpp) — bez interneta i bez PC-ja; model se skida
+  jednom. Izbor modela kao na desktopu: Large v3 Turbo (preporuka), Large v3, Medium, Small
+- **Isto formatiranje titlova**: gustina (reč / standard / više / custom), broj znakova po
+  redu, broj redova, velika/mala slova, uklanjanje interpunkcije, cenzura, vokabular/kontekst
+- **Stil**: font (uključeni fontovi + uvoz sopstvenog `.ttf`/`.otf`, npr. Franklin Gothic
+  Demi), veličina, pozicija (možeš da prevučeš titl direktno na preview-u), boje, outline,
+  senka, "pop" izgovorene reči, ulazne animacije
+- **AutoSubs preseti** (`.autosubs-preset.json`) — uvoz i izvoz, isti fajlovi kao na desktopu
+- **Aspect ratio**: Auto / 9:16 / 16:9 / 1:1 / 4:5
+- **Timeline**: waveform, pomeranje i skraćivanje blokova prevlačenjem, prevlačenje preko
+  susednog bloka ga pregazi (kao u DaVinci-ju), split, brisanje, dupliranje, spajanje,
+  undo/redo, pinch zoom, inercija pri skrolovanju
+- Pronađi i zameni, regrupisanje titlova iz transkripta, safe-area vodilice (uključuju se
+  dugmetom), automatsko čuvanje projekata
+- **Export** hardverskim koderom; snimi u galeriju (`Movies/DPX Captions`) ili podeli
+- U aplikaciju možeš da **podeliš (Share) video direktno iz galerije**
+
+### Instalacija
+
+1. Preuzmi `DPX-Captions.apk` na telefon.
+2. Otvori ga; Android će tražiti da dozvoliš **instalaciju iz nepoznatih izvora** za
+   aplikaciju kojom si ga otvorio (pregledač ili Files). Dozvoli i potvrdi instalaciju.
+3. Pri prvom pokretanju izaberi video, pa u koraku pripreme **preuzmi model** (Turbo je ~574 MB;
+   preporučena je Wi-Fi mreža). Preuzimanje se nastavlja ako se prekine.
+
+Zahtevi: Android 10 ili noviji, 64-bitni ARM procesor sa Armv8.2 dot-product instrukcijama
+(praktično svaki telefon od ~2018). Large v3 traži oko 2 GB slobodne memorije.
+
+### Kako se koristi
+
+1. **New project** → izaberi video. Ekran pripreme prikazuje trajanje i rezoluciju.
+2. Izaberi model i opcije titlova, pa **Generate captions**. Obrada ide u pozadini uz
+   obaveštenje sa napretkom, tako da možeš da zaključaš telefon.
+3. U editoru:
+
+| Radnja | Kako |
+|---|---|
+| Pomeranje po vremenu | prevuci timeline levo/desno (playhead je fiksan u sredini) |
+| Zoom | pinch, ili dugmad + / − |
+| Izbor titla | dodir na blok |
+| Pomeranje titla | prevuci izabrani blok |
+| Skraćivanje / produžavanje | prevuci belu ručku na ivici izabranog bloka |
+| Izmena teksta | izaberi blok → **Edit** |
+| Sečenje | postavi playhead unutar bloka → **Split** |
+| Novi titl | postavi playhead → **Add** |
+| Pozicija titla na ekranu | prevuci titl na preview-u |
+| Stil | **Style** (font, veličina, boje, outline, animacije, preseti) |
+| Aspect ratio | dugme sa oznakom formata pored plejera |
+| Poništi / ponovi | strelice gore desno |
+
+4. **Export** → izaberi format, rezoluciju i kvalitet → **Save to gallery** ili **Share**.
+
+### Pravljenje APK-a iz izvornog koda
+
+Potrebni su JDK 17+ i Android SDK (platforma 35). NDK i CMake Gradle skida sam.
+
+```bash
+cd android
+./gradlew assembleDebug      # debug APK (arm64 + x86_64 za emulator)
+./gradlew assembleRelease    # potpisani arm64 APK
+```
+
+Za potpisan release napravi `android/keystore.properties` (nije u repozitorijumu) sa
+`storeFile`, `storePassword`, `keyAlias`, `keyPassword`. **Čuvaj keystore** — bez istog
+ključa nova verzija se ne može instalirati preko stare.
+
+### Ograničenja Android verzije
+
+- Testirano na Android emulatoru; **brzina transkripcije na pravom telefonu zavisi od
+  procesora** i nije izmerena. Na emulatoru (bez ARM optimizacija) Small model obradi
+  22 sekunde govora za ~55 s.
+- Tajming reči dolazi iz DTW poravnanja. U poređenju sa desktop faster-whisper-om na istom
+  audiju, početak reči u proseku kasni oko 0.06 s (75% reči je unutar 0.1 s).
+- HDR klipovi se prevode u SDR pri exportu. Vertikalni klipovi se kodiraju sa oznakom
+  rotacije (ponašanje Media3 kodera; isto kao kod snimaka sa kamere).
+- Jedan video po projektu, bez batch obrade.
 
 ## Šta radi
 
