@@ -34,6 +34,30 @@ class TranscriptSegment:
     words: list[Word]
 
 
+WHISPER_SAMPLE_RATE = 16000
+
+
+def load_wav_samples(audio_path: str):
+    """Reads the 16 kHz mono s16le wav from ffmpeg_util.extract_audio as float32.
+
+    faster-whisper's own decoder goes through PyAV, and newer PyAV releases
+    dropped the `metadata_errors` argument it passes to av.open(), so handing
+    it a path fails. A ready-made sample array skips that decoder entirely.
+    """
+    import wave
+
+    import numpy as np
+
+    with wave.open(audio_path, "rb") as wav:
+        if (wav.getframerate(), wav.getnchannels(), wav.getsampwidth()) != (WHISPER_SAMPLE_RATE, 1, 2):
+            raise ValueError(
+                f"{audio_path} is not 16 kHz mono 16-bit PCM "
+                f"({wav.getframerate()} Hz, {wav.getnchannels()} ch, {wav.getsampwidth() * 8}-bit)"
+            )
+        raw = wav.readframes(wav.getnframes())
+    return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+
+
 def load_model(model_size: str = "large-v3-turbo", backend: ComputeBackend | None = None):
     from faster_whisper import WhisperModel
 
@@ -56,7 +80,7 @@ def transcribe(
     """
     model = load_model(model_size, backend)
     segments_iter, info = model.transcribe(
-        audio_path,
+        load_wav_samples(audio_path),
         language="sr",
         word_timestamps=True,
         initial_prompt=vocabulary_context or None,
