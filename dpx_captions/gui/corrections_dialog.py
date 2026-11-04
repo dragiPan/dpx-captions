@@ -41,8 +41,8 @@ class CorrectionsDialog(QDialog):
         self.filter_edit.textChanged.connect(self._refresh)
         layout.addWidget(self.filter_edit)
 
-        self.table = QTableWidget(0, 3, self)
-        self.table.setHorizontalHeaderLabels(["Whisper wrote", "Corrected to", "Times"])
+        self.table = QTableWidget(0, 4, self)
+        self.table.setHorizontalHeaderLabels(["Whisper wrote", "Corrected to", "Applies", "Times"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
@@ -80,9 +80,15 @@ class CorrectionsDialog(QDialog):
             source_item.setData(Qt.UserRole, key)
             self.table.setItem(r, 0, source_item)
             self.table.setItem(r, 1, QTableWidgetItem(target))
+            where = QTableWidgetItem("only in this phrase" if self.store.is_context(key) else "everywhere")
+            where.setToolTip(
+                "Learned with the words around it, because the edit only makes sense there"
+                if self.store.is_context(key) else "A spelling fix applied wherever Whisper writes this"
+            )
+            self.table.setItem(r, 2, where)
             votes_item = QTableWidgetItem()
             votes_item.setData(Qt.DisplayRole, votes)
-            self.table.setItem(r, 2, votes_item)
+            self.table.setItem(r, 3, votes_item)
         self.table.setSortingEnabled(True)
         self.count_label.setText(f"{len(self.store.rules)} correction(s)")
 

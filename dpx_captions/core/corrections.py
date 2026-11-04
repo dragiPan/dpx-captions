@@ -7,6 +7,11 @@ rewrote becomes a rule "Whisper wrote X -> it should be Y" (for example
 captions are generated, the rules rewrite Whisper's words before they are
 grouped into cards, so the editor opens with those fixes already made.
 
+Spelling fixes and merges become general rules. Edits that are only right
+in their sentence - splitting "koji" into "ko i", say - are learned with
+the whole card around them ("retko koji" -> "retko ko i"), so they only
+fire where the same words come up again.
+
 Matching ignores case and punctuation. An edit only counts when the edited
 words sit in the same time range as the generated ones, so moving or
 deleting cards is not mistaken for a correction. If the user undoes an
@@ -30,8 +35,17 @@ from .transcribe import Word
 if TYPE_CHECKING:
     from .caption_builder import CaptionCard
 
-# Longest phrase (in words) a rule can match, on either side.
+# Longest phrase (in words) a general rule can match, on either side.
 MAX_PHRASE_WORDS = 3
+# Longest card kept whole as the context of a context-dependent edit; in
+# longer cards the context is the edit plus one word on either side.
+MAX_CONTEXT_WORDS = 8
+# A one-to-one fix of a word this short ("je" -> "jer") is too likely to be
+# right only in its sentence to apply everywhere.
+SHORT_WORD = 3
+# A neighbour this similar to what Whisper wrote counts as kept ("redko"
+# respelled "retko"), so it can still anchor a context rule.
+REFERENCE_SIMILARITY = 0.75
 # Seconds of slack when checking that an edit sits where the generated words were.
 TIME_TOLERANCE = 0.35
 # In a block where several neighbouring words changed, a pairing must be at
@@ -113,25 +127,35 @@ class CorrectionStore:
 
     rules: dict[str, dict[str, int]] = field(default_factory=dict)
     path: Path | None = None
+    # Keys of rules learned with their surrounding words. Their keys are
+    # written with the general rules already applied ("retko koji", even if
+    # Whisper wrote "redko koji"), and they run after the general rules.
+    context: set[str] = field(default_factory=set)
 
     @classmethod
     def load(cls, path: Path | None = None) -> CorrectionStore:
         path = path or corrections_path()
         rules: dict[str, dict[str, int]] = {}
+        context: set[str] = set()
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             for key, targets in data.get("rules", {}).items():
                 clean = {str(t): int(n) for t, n in targets.items() if int(n) > 0}
                 if key and clean:
                     rules[key] = clean
+            context = {k for k in data.get("context", []) if k in rules}
         except (OSError, ValueError, TypeError, AttributeError):
             pass
-        return cls(rules=rules, path=path)
+        return cls(rules=rules, path=path, context=context)
 
     def save(self) -> None:
         path = self.path or corrections_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = {"version": 1, "rules": dict(sorted(self.rules.items()))}
+        data = {
+            "version": 1,
+            "rules": dict(sorted(self.rules.items())),
+            "context": sorted(k for k in self.context if k in self.rules),
+        }
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         tmp.replace(path)
@@ -146,9 +170,14 @@ class CorrectionStore:
         target = self.best(key)
         return self.rules[key][target] if target is not None else 0
 
-    def learn(self, key: str, target: str) -> None:
+    def learn(self, key: str, target: str, context: bool = False) -> None:
         targets = self.rules.setdefault(key, {})
         targets[target] = targets.get(target, 0) + 1
+        if context:
+            self.context.add(key)
+
+    def is_context(self, key: str) -> bool:
+        return key in self.context
 
     def confirm(self, key: str) -> None:
         target = self.best(key)
@@ -166,49 +195,51 @@ class CorrectionStore:
             del targets[target]
         if not targets:
             del self.rules[key]
+            self.context.discard(key)
         return target
 
     def remove(self, key: str) -> None:
         self.rules.pop(key, None)
+        self.context.discard(key)
 
-    def max_words(self) -> int:
-        return max((len(key.split()) for key in self.rules), default=0)
+    def max_words(self, context: bool | None = None) -> int:
+        keys = [k for k in self.rules if context is None or (k in self.context) == context]
+        return max((len(key.split()) for key in keys), default=0)
 
 
 # --------------------------------------------------------------------- apply
 def _rewrite(src: list[Word], key: str, target: str) -> list[Word]:
+    from .retime import retime  # retime builds on this module's alignment
+
     lead = _split_edges(src[0].text)[0]
     trail = _split_edges(src[-1].text)[2]
     source_display = " ".join(_core(w.text) for w in src)
     tokens = _apply_case(target, source_display).split()
-    probability = min(w.probability for w in src)
-
-    if len(tokens) == len(src):
-        spans = [(w.start, w.end) for w in src]
-    else:
-        start, end = src[0].start, src[-1].end
-        weights = [len(t) + 1 for t in tokens]
-        total = sum(weights)
-        spans, t = [], start
-        for weight in weights:
-            nxt = t + (end - start) * weight / total
-            spans.append((t, nxt))
-            t = nxt
+    # Words the rule leaves alone ("retko" in "retko koji" -> "retko ko i")
+    # keep their exact time; changed ones take the time of what they replace.
+    timed = retime(tokens, [replace(w, text=_core(w.text)) for w in src], src[0].start, src[-1].end)
 
     tokens[0] = lead + tokens[0]
     tokens[-1] = tokens[-1] + trail
     return [
-        Word(text=tok, start=s, end=e, probability=probability, source=key)
-        for tok, (s, e) in zip(tokens, spans)
+        Word(text=tok, start=w.start, end=w.end, probability=w.probability, source=key)
+        for tok, w in zip(tokens, timed)
     ]
 
 
 def apply_corrections(words: list[Word], store: CorrectionStore) -> tuple[list[Word], list[tuple[str, str]]]:
-    """Rewrites Whisper's words with the learned rules, longest phrase first.
+    """Rewrites Whisper's words with the learned rules, longest phrase first:
+    general rules, then the context rules over their result.
 
     Returns the new word list and (whisper phrase, replacement) per rewrite.
     """
-    max_words = store.max_words()
+    words, applied = _apply_pass(words, store, context=False)
+    words, more = _apply_pass(words, store, context=True)
+    return words, applied + more
+
+
+def _apply_pass(words: list[Word], store: CorrectionStore, context: bool) -> tuple[list[Word], list[tuple[str, str]]]:
+    max_words = store.max_words(context)
     if not max_words:
         return list(words), []
 
@@ -222,6 +253,8 @@ def apply_corrections(words: list[Word], store: CorrectionStore) -> tuple[list[W
         match = None
         for length in range(min(max_words, len(matchable) - k), 0, -1):
             key = " ".join(norms[matchable[k + m]] for m in range(length))
+            if store.is_context(key) != context:
+                continue
             target = store.best(key)
             if target is not None and " ".join(normalize(t) for t in target.split()) != key:
                 match = (length, key, target)
@@ -302,6 +335,21 @@ def _align(a: list[str], b: list[str]) -> list[tuple[int, int, int, int]]:
     return groups
 
 
+def _is_general(src: list[str], dst: list[str]) -> bool:
+    """Whether an edit is safe to apply wherever Whisper writes the same thing.
+
+    A spelling fix of one word ("zahtjeva" -> "zahteva") or a merge into one
+    word ("dobit ćeš" -> "dobićeš") is. Splitting a word ("koji" -> "ko i"),
+    swapping in an unrelated word, or touching a short word ("je" -> "jer")
+    is only right in its sentence, so those are learned with their card.
+    """
+    if len(dst) != 1:
+        return False
+    if len(src) > 1:
+        return True
+    return len(src[0]) > SHORT_WORD and SequenceMatcher(None, src[0], dst[0], autojunk=False).ratio() >= 0.5
+
+
 def _overlaps(a_start: float, a_end: float, b_start: float, b_end: float) -> bool:
     return a_start < b_end + TIME_TOLERANCE and b_start < a_end + TIME_TOLERANCE
 
@@ -347,11 +395,64 @@ def learn_from_edits(
                 store.confirm(key)
                 report.confirmed += 1
 
+    base_index = {id(w): i for i, w in enumerate(base)}
+
+    def context(src: list[Word], dst: list[tuple[Word, CaptionCard]]) -> tuple[list[Word], list[Word]] | None:
+        """The card's words around a context-dependent edit, as (generated
+        words, edited words). The context grows over neighbours the user
+        kept (or only re-spelled) and stops at anything moved or deleted,
+        so the rule never deletes a word that merely went to the next card.
+        None when nothing anchors the edit (a one-word card, say)."""
+        card = dst[0][1]
+        if any(c is not card for _, c in dst):
+            return None  # spread over several cards
+        card_words = [w for w in card.words if normalize(w.text)]
+        positions = {id(w): k for k, w in enumerate(card_words)}
+        i0, i1 = base_index[id(src[0])], base_index[id(src[-1])]
+        k0, k1 = positions[id(dst[0][0])], positions[id(dst[-1][0])]
+
+        def kept(i: int, k: int) -> bool:
+            w = base[i]
+            if not card.start - TIME_TOLERANCE <= (w.start + w.end) / 2 <= card.end + TIME_TOLERANCE:
+                return False
+            s, t = a[i], normalize(card_words[k].text)
+            return s == t or SequenceMatcher(None, s, t, autojunk=False).ratio() >= REFERENCE_SIMILARITY
+
+        s0, d0, s1, d1 = i0, k0, i1, k1
+        while s0 > 0 and d0 > 0 and kept(s0 - 1, d0 - 1):
+            s0, d0 = s0 - 1, d0 - 1
+        while s1 + 1 < len(base) and d1 + 1 < len(card_words) and kept(s1 + 1, d1 + 1):
+            s1, d1 = s1 + 1, d1 + 1
+        if (s0, s1) == (i0, i1):
+            return None
+        if s1 - s0 + 1 > MAX_CONTEXT_WORDS or d1 - d0 + 1 > MAX_CONTEXT_WORDS:
+            # Long card: keep just one neighbour on each side that exists.
+            s0, d0 = (i0 - 1, k0 - 1) if s0 < i0 else (i0, k0)
+            s1, d1 = (i1 + 1, k1 + 1) if s1 > i1 else (i1, k1)
+        return base[s0:s1 + 1], card_words[d0:d1 + 1]
+
+    pending_context: list[tuple[list[Word], list[Word], list[Word]]] = []
+
     def record(src: list[Word], dst: list[tuple[Word, CaptionCard]]) -> None:
+        dst_words = [w for w, _ in dst]
+        if not _is_general([normalize(w.text) for w in src], [normalize(w.text) for w in dst_words]):
+            found = context(src, dst)
+            if found is not None:
+                # Written once every general rule of this export is known,
+                # so its key can be stated with those applied.
+                pending_context.append((found[0], found[1], src))
+            return
+        commit(src, dst_words, MAX_PHRASE_WORDS, context_rule=False)
+
+    def commit(src: list[Word], dst_words: list[Word], limit: int, context_rule: bool,
+               edited: list[Word] | None = None) -> None:
+        """`edited` is the part of `src` the user actually changed (all of it
+        unless `src` includes context): only automatic fixes there were undone."""
         # Starred words are censoring ("PIČ****"), not a transcription fix;
         # stripping the stars would learn a truncated word.
-        if any("*" in w.text for w in src) or any("*" in w.text for w, _ in dst):
+        if any("*" in w.text for w in src) or any("*" in w.text for w in dst_words):
             return
+        edited_ids = {id(w) for w in (edited if edited is not None else src)}
         original: list[str] = []
         undone: list[str] = []
         prev = None
@@ -360,13 +461,19 @@ def learn_from_edits(
                 original.append(normalize(w.text))
             elif w.source != prev:
                 original.extend(w.source.split())
-                undone.append(w.source)
+                if id(w) in edited_ids:
+                    undone.append(w.source)
             prev = w.source
 
-        target_tokens = [_core(w.text) for w, _ in dst]
+        target_tokens = [_core(w.text) for w in dst_words]
         target_tokens = [t for t in target_tokens if t]
         if not target_tokens:
             return
+        if context_rule:
+            # State the key as it reads after the general rules, which run
+            # first: "redko koji" is stored as "retko koji".
+            fixed, _ = _apply_pass([Word(t, 0.0, 0.0) for t in original], store, context=False)
+            original = [n for n in (normalize(w.text) for w in fixed) if n]
         source_key = " ".join(original)
         target_norm = " ".join(normalize(t) for t in target_tokens)
 
@@ -380,10 +487,10 @@ def learn_from_edits(
             if old is not None:
                 report.rejected.append((key, old))
 
-        if target_norm != source_key and len(original) <= MAX_PHRASE_WORDS:
+        if target_norm != source_key and len(original) <= limit:
             source_display = " ".join(_core(w.text) for w in src)
             target = _stored_target(" ".join(target_tokens), source_display, case_meaningful)
-            store.learn(source_key, target)
+            store.learn(source_key, target, context=context_rule)
             report.learned.append((source_key, target))
 
     matcher = SequenceMatcher(None, a, b, autojunk=False)
@@ -410,6 +517,8 @@ def learn_from_edits(
                         continue
                 record(src, dst)
 
+    for src, dst_words, edited in pending_context:
+        commit(src, dst_words, MAX_CONTEXT_WORDS, context_rule=True, edited=edited)
     return report
 
 
