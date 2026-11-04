@@ -9,9 +9,11 @@ word placement is identical in preview and burned-in output.
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass
+from functools import lru_cache
 
-from PySide6.QtGui import QFont, QFontMetricsF
+from PySide6.QtGui import QFont, QFontMetricsF, QRawFont
 
 from .caption_builder import CaptionCard
 from .style import AnimationStyle
@@ -33,6 +35,52 @@ def caption_font(style: AnimationStyle, canvas_height: int) -> QFont:
     font.setBold(bool(style.Bold))
     font.setItalic("italic" in style.Style.lower())
     return font
+
+
+@lru_cache(maxsize=64)
+def _libass_metrics(family: str, bold: bool, italic: bool) -> tuple[float, float]:
+    font = QFont(family)
+    font.setPixelSize(1000)
+    font.setBold(bold)
+    font.setItalic(italic)
+    raw = QRawFont.fromFont(font)
+    head = bytes(raw.fontTable("head"))
+    os2 = bytes(raw.fontTable("OS/2"))
+    hhea = bytes(raw.fontTable("hhea"))
+    units = struct.unpack(">H", head[18:20])[0] if len(head) >= 20 else 0
+
+    ascent = descent = 0
+    if len(os2) >= 78:  # usWinAscent / usWinDescent, read as signed like libass does
+        ascent, descent = struct.unpack(">hh", os2[74:78])
+    if ascent + descent == 0 and len(hhea) >= 8:  # FreeType's default: hhea
+        ascent, neg_descent = struct.unpack(">hh", hhea[4:8])
+        descent = -neg_descent
+    if ascent + descent == 0 and len(os2) >= 72:  # sTypoAscender / sTypoDescender
+        ascent, neg_descent = struct.unpack(">hh", os2[68:72])
+        descent = -neg_descent
+
+    if units <= 0 or ascent + descent <= 0:
+        metrics = QFontMetricsF(font)
+        return metrics.ascent() / 1000, metrics.descent() / 1000
+    return ascent / units, descent / units
+
+
+def libass_metrics(font: QFont) -> tuple[float, float]:
+    """(ascent, descent) as libass sees this font, as fractions of the Qt pixel size.
+
+    An ASS font size is not an em size: libass scales the font so that
+    usWinAscent + usWinDescent from the OS/2 table equals the requested
+    size (falling back to hhea, then typo metrics). Qt's pixel size is the
+    em, and for fonts flagged USE_TYPO_METRICS Qt's own ascent/descent
+    differ from libass's too, so the tables are read directly.
+    """
+    return _libass_metrics(font.family(), font.bold(), font.italic())
+
+
+def ass_font_size(font: QFont) -> float:
+    """The ASS Fontsize that makes libass draw glyphs the size Qt draws `font`."""
+    ascent, descent = libass_metrics(font)
+    return font.pixelSize() * (ascent + descent)
 
 
 def layout_card(

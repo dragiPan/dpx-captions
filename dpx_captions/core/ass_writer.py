@@ -18,7 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .caption_builder import CaptionCard
-from .layout import caption_font, layout_card
+from .layout import ass_font_size, caption_font, layout_card
 from .style import AnimationStyle
 
 
@@ -41,9 +41,11 @@ def _fmt_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def _build_style_line(style: AnimationStyle, font_size: int) -> str:
-    outline_px = round(style.OutlineThickness * font_size) if style.OutlineEnabled else 0
-    shadow_px = round(style.ShadowOffset * font_size) if style.ShadowEnabled else 0
+def _build_style_line(style: AnimationStyle, font_px: int, ass_size: float) -> str:
+    """`font_px` is the em size the preview uses (outline and shadow scale
+    with it); `ass_size` is the libass size that renders glyphs at that em."""
+    outline_px = round(style.OutlineThickness * font_px) if style.OutlineEnabled else 0
+    shadow_px = round(style.ShadowOffset * font_px) if style.ShadowEnabled else 0
     bold = -1 if style.Bold else 0
     italic = -1 if "italic" in style.Style.lower() else 0
 
@@ -53,7 +55,7 @@ def _build_style_line(style: AnimationStyle, font_size: int) -> str:
 
     return (
         "Style: Caption,"
-        f"{style.Font},{font_size},{fill},{fill},{outline},{shadow},"
+        f"{style.Font},{ass_size:.2f},{fill},{fill},{outline},{shadow},"
         f"{bold},{italic},0,0,100,100,0,0,"
         f"1,{outline_px},{shadow_px},5,10,10,10,1"
     )
@@ -98,7 +100,7 @@ def write_ass(
     height: int,
     output_path: str | Path,
 ) -> Path:
-    font_size = caption_font(style, height).pixelSize()
+    font = caption_font(style, height)
 
     lines = [
         "\n".join(
@@ -114,7 +116,7 @@ def write_ass(
                 "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
                 "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
                 "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-                _build_style_line(style, font_size),
+                _build_style_line(style, font.pixelSize(), ass_font_size(font)),
                 "",
                 "[Events]",
                 "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
