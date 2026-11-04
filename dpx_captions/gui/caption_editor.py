@@ -8,9 +8,9 @@ global style control in the style panel, not per-card yet).
 
 from __future__ import annotations
 
-from dataclasses import replace
+from typing import Sequence
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.caption_builder import CaptionCard
+from ..core.retime import rebuild_card, wrap_words
 from ..core.style import CaptionFormatting
 from ..core.transcribe import Word
 
@@ -34,33 +35,18 @@ def _card_text(card: CaptionCard) -> str:
     return " ".join(w.text for line in card.lines for w in line)
 
 
-def rebuild_card_text(card: CaptionCard, new_text: str, formatting: CaptionFormatting) -> CaptionCard:
-    """Re-tokenizes edited text and evenly redistributes timing across the
-    card's original start/end span, then re-wraps into lines using the
-    current density settings."""
-    tokens = new_text.split()
-    if not tokens:
-        return replace(card, lines=[[]])
+def rebuild_card_text(
+    card: CaptionCard,
+    new_text: str,
+    formatting: CaptionFormatting,
+    reference: Sequence[Word] = (),
+) -> list[CaptionCard]:
+    """Applies edited text to a card, keeping each word on its spoken time
+    (see core.retime). Returns several cards when the text contains "|"."""
+    return rebuild_card(card, new_text, formatting, reference)
 
-    span = max(card.end - card.start, 0.01)
-    step = span / len(tokens)
-    words = [
-        Word(text=tok, start=card.start + i * step, end=card.start + (i + 1) * step)
-        for i, tok in enumerate(tokens)
-    ]
 
-    max_chars = formatting.max_chars_per_line if formatting.max_chars_per_line else 17
-    max_lines = max(1, formatting.line_count)
-    lines: list[list[Word]] = [[]]
-    for w in words:
-        line = lines[-1]
-        tentative_len = sum(len(x.text) for x in line + [w]) + len(line)
-        if line and tentative_len > max_chars and len(lines) < max_lines:
-            lines.append([w])
-        else:
-            line.append(w)
-
-    return CaptionCard(lines=[l for l in lines if l], start=words[0].start, end=words[-1].end)
+SPLIT_HINT = 'Tip: type "|" between words to split the card there, e.g. "OVO JE | ZAISTA TAKO".'
 
 
 class CaptionEditorWidget(QWidget):
@@ -71,6 +57,9 @@ class CaptionEditorWidget(QWidget):
         super().__init__(parent)
         self.formatting = CaptionFormatting()
         self.cards: list[CaptionCard] = []
+        # Original Whisper words; lets an edit find the spoken time of a word
+        # that wasn't in the card before.
+        self.reference_words: list[Word] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -80,6 +69,7 @@ class CaptionEditorWidget(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(COL_TEXT, QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setToolTip(SPLIT_HINT)
         layout.addWidget(self.table)
 
         btn_row = QHBoxLayout()
@@ -122,8 +112,9 @@ class CaptionEditorWidget(QWidget):
         if not text.strip() or not rows:
             return
         lines = [line for line in text.splitlines() if line.strip()]
-        for row, line in zip(rows, lines):
-            self.cards[row] = rebuild_card_text(self.cards[row], line, self.formatting)
+        # Bottom-up, so a row that splits into several doesn't shift the rest.
+        for row, line in reversed(list(zip(rows, lines))):
+            self.cards[row:row + 1] = rebuild_card_text(self.cards[row], line, self.formatting, self.reference_words)
         self._refresh_table()
         self.cards_changed.emit()
 
@@ -162,7 +153,11 @@ class CaptionEditorWidget(QWidget):
         row = item.row()
         if row >= len(self.cards):
             return
-        self.cards[row] = rebuild_card_text(self.cards[row], item.text(), self.formatting)
+        new_cards = rebuild_card_text(self.cards[row], item.text(), self.formatting, self.reference_words)
+        self.cards[row:row + 1] = new_cards
+        if len(new_cards) > 1:
+            # Rows were added; rebuild the table once the cell editor has closed.
+            QTimer.singleShot(0, self._refresh_table)
         self.cards_changed.emit()
 
     def _selected_rows(self) -> list[int]:
@@ -184,11 +179,9 @@ class CaptionEditorWidget(QWidget):
         rows = self._selected_rows()
         if len(rows) < 2:
             return
-        merged_lines = []
-        for r in rows:
-            merged_lines.extend(self.cards[r].lines)
+        words = [w for r in rows for w in self.cards[r].words]
         merged = CaptionCard(
-            lines=merged_lines,
+            lines=wrap_words(words, self.formatting),
             start=self.cards[rows[0]].start,
             end=self.cards[rows[-1]].end,
         )

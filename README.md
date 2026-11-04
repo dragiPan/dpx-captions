@@ -210,19 +210,37 @@ Timeline (ispod preview-a):
 | Radnja | Kako |
 |---|---|
 | Pomeranje titla | prevuci blok |
-| Skraćivanje / produžavanje | prevuci levu ili desnu ivicu |
+| Skraćivanje / produžavanje | prevuci levu ili desnu ivicu, ili `Q` / `W` (početak / kraj do playhead-a) |
 | Overwrite | prevuci preko susednog bloka — pregazi ga |
-| Sečenje na playhead-u | `Ctrl+B` |
+| Sečenje na playhead-u | `Ctrl+B` — seče između reči, nova kartica počinje na prvoj svojoj reči |
+| Deljenje po rečima | u tekstu kartice ukucaj `\|` između reči: `OVO JE \| ZAISTA TAKO` |
+| Spajanje sa sledećom | `Ctrl+M` |
+| Nova kartica na playhead-u | `Ctrl+N` |
 | Brisanje | `Del` |
 | Play / pauza | `Space` |
+| Frejm napred / nazad | `→` / `←` (`Shift` = 1 sekunda) |
+| Prethodna / sledeća kartica | `↑` / `↓` |
+| Početak / kraj klipa | `Home` / `End` |
+| Izmena teksta | dupli klik na blok, ili `Enter` / `F2` |
 | Kopiranje / lepljenje teksta | `Ctrl+C` / `Ctrl+V` |
-| Izmena teksta | dupli klik na blok |
 | Zoom | `Ctrl` + točkić (drži tačku pod kursorom) |
 | Horizontalno skrolovanje | `Alt` + točkić |
 | Pomeranje playhead-a | klik na lenjir ili waveform |
 | Poništi / ponovi | `Ctrl+Z` / `Ctrl+Y` |
+| Find & Replace / Save / Open | `Ctrl+F` / `Ctrl+S` / `Ctrl+O` |
+| Generate / Export | `Ctrl+G` / `Ctrl+E` |
+| Spisak prečica | `F1` ili dugme `?` |
 
-Na granici dva bloka hvata se onaj sa čije strane je kursor.
+Tasteri bez `Ctrl` (strelice, `Q`/`W`, `Space`, `Enter`...) rade kada je timeline aktivan
+(klikni na njega); `Ctrl` prečice rade bilo gde. Na granici dva bloka hvata se onaj sa
+čije strane je kursor.
+
+**Highlight prati zvuk i posle izmena.** Svaka reč čuva vreme kada je izgovorena:
+kad promeniš tekst kartice, reči koje ostaju zadržavaju svoje vreme, ispravljena (ili
+spojena/razdvojena) reč dobija vreme reči koju menja, a obrisane nestaju. Reč koju
+dopišeš traži se u originalnom transkriptu oko te kartice; tek ako je nema, smešta se
+u slobodan prostor između suseda. Kada karticu podeliš (`Ctrl+B` ili `|`), svaka nova
+kartica počinje tačno kada se izgovori njena prva reč, pa highlight ne kasni.
 
 U tabeli **Subtitles** se ispravlja tekst; vremena se menjaju isključivo na timeline-u.
 **Add Card** ubacuje novi titl na poziciju playhead-a.

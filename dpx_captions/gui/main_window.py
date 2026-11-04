@@ -43,6 +43,35 @@ from .workers import ExportWorker, GenerateWorker, WaveformWorker, run_in_thread
 
 TIMELINE_SCROLL_HEIGHT = 160
 
+SHORTCUTS_HELP = """Anywhere
+  Ctrl+B          Cut the card at the playhead (between words)
+  Ctrl+M          Merge the selected card with the next one
+  Ctrl+N          New card at the playhead
+  Ctrl+Z / Ctrl+Y Undo / redo
+  Ctrl+F          Find and replace
+  Ctrl+S / Ctrl+O Save / open project
+  Ctrl+G          Generate captions
+  Ctrl+E          Export video
+  F1              This list
+
+Timeline (click it first)
+  Space           Play / pause
+  ← / →           Previous / next frame
+  Shift+← / →     1 second back / forward
+  ↑ / ↓           Previous / next card
+  Home / End      Start / end of the clip
+  Enter or F2     Edit the selected card's text
+  Q / W           Trim the selected card's start / end to the playhead
+  Del             Delete the selected card
+  Ctrl+C / Ctrl+V Copy / paste card text
+  Esc             Deselect
+  Ctrl+wheel      Zoom      Alt+wheel  Scroll
+
+Editing text
+  Type "|" between words to split a card there:
+  "OVO JE | ZAISTA TAKO" becomes two cards. Words keep
+  their spoken timing, so the highlight stays on the audio."""
+
 
 class MainWindow(QWidget):
     def __init__(self):
@@ -91,14 +120,37 @@ class MainWindow(QWidget):
         self._check_ffmpeg()
 
     def _install_shortcuts(self) -> None:
+        """Window-wide shortcuts. Single-key ones (arrows, Q/W, Space...) live
+        on the timeline instead, so they never fire while typing a caption."""
         for sequence, handler in (
             (QKeySequence.Undo, self._on_undo),
             (QKeySequence.Redo, self._on_redo),
             (QKeySequence("Ctrl+Y"), self._on_redo),
+            (QKeySequence("Ctrl+B"), self._unless_typing(lambda: self.timeline.split_at_playhead())),
+            (QKeySequence("Ctrl+M"), self._unless_typing(lambda: self.timeline.merge_selected_with_next())),
+            (QKeySequence("Ctrl+N"), self._unless_typing(self._on_add_card)),
+            (QKeySequence("Ctrl+F"), self._on_find_replace),
+            (QKeySequence("Ctrl+S"), self._on_save_project),
+            (QKeySequence("Ctrl+O"), self._on_open_project),
+            (QKeySequence("Ctrl+G"), lambda: self.generate_btn.isEnabled() and self._on_generate_clicked()),
+            (QKeySequence("Ctrl+E"), lambda: self.export_btn.isEnabled() and self._on_export_clicked()),
+            (QKeySequence("F1"), self._show_shortcuts),
         ):
             shortcut = QShortcut(QKeySequence(sequence), self)
             shortcut.setContext(Qt.WindowShortcut)
             shortcut.activated.connect(handler)
+
+    @staticmethod
+    def _unless_typing(action):
+        """Card edits must not run while a caption's text is being typed:
+        the cell editor would then commit into a card that has moved."""
+        def run():
+            if not isinstance(QApplication.focusWidget(), (QLineEdit, QPlainTextEdit, QTextEdit)):
+                action()
+        return run
+
+    def _show_shortcuts(self) -> None:
+        QMessageBox.information(self, "Keyboard shortcuts", SHORTCUTS_HELP)
 
     # --------------------------------------------------------------- Left side
     def _build_left_panel(self) -> QWidget:
@@ -224,11 +276,15 @@ class MainWindow(QWidget):
         fit_btn = QPushButton("Fit")
         fit_btn.setFixedWidth(48)
         fit_btn.clicked.connect(lambda: self.timeline.zoom_fit())
+        shortcuts_btn = QPushButton("?")
+        shortcuts_btn.setFixedWidth(28)
+        shortcuts_btn.setToolTip("Keyboard shortcuts (F1)")
+        shortcuts_btn.clicked.connect(self._show_shortcuts)
         for widget in (self.split_btn, self.delete_card_btn, self.find_btn, self.corrections_btn):
             tools.addWidget(widget)
         tools.addStretch(1)
         tools.addWidget(QLabel("Zoom"))
-        for widget in (zoom_out_btn, zoom_in_btn, fit_btn):
+        for widget in (zoom_out_btn, zoom_in_btn, fit_btn, shortcuts_btn):
             tools.addWidget(widget)
         layout.addLayout(tools)
 
@@ -296,6 +352,8 @@ class MainWindow(QWidget):
             f"{int(minutes)}:{seconds:04.1f}  •  {info.width}×{info.height}  •  {info.fps:.2f} fps"
         )
         self.timeline.set_duration(info.duration)
+        if info.fps > 0:
+            self.timeline.frame_duration = 1 / info.fps
         self.video_preview.set_style(self.style_panel.style)
         self._load_waveform(path)
         self._schedule_session_save()
@@ -329,8 +387,7 @@ class MainWindow(QWidget):
     def _on_generate_finished(self, result) -> None:
         self.video_info = result.video_info
         self.cards = result.cards
-        self.baseline_words = baseline_from_cards(result.cards)
-        self.learned_signatures = set()
+        self._set_baseline(baseline_from_cards(result.cards), set())
         self.history.reset(self.cards)
         self._update_history_buttons()
         self._push_cards_everywhere()
@@ -339,6 +396,7 @@ class MainWindow(QWidget):
         self.progress_bar.setVisible(False)
         self.generate_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
+        self.timeline.setFocus()
         applied = len(result.applied_corrections)
         self.progress_label.setText(
             f"Done - applied {applied} learned correction(s)" if applied else "Done"
@@ -475,8 +533,7 @@ class MainWindow(QWidget):
                 self.model_combo.setCurrentText(label)
 
         self.cards = data["cards"]
-        self.baseline_words = data["baseline"]
-        self.learned_signatures = data["learned"]
+        self._set_baseline(data["baseline"], data["learned"])
         self.history.reset(self.cards)
         self._update_history_buttons()
         self._push_cards_everywhere()
@@ -484,6 +541,14 @@ class MainWindow(QWidget):
         if self.video_info and data["playhead"] > 0:
             self.timeline.set_playhead(data["playhead"])
             self.video_preview.seek_when_loaded(data["playhead"])
+
+    def _set_baseline(self, words: list, learned: set[str]) -> None:
+        """The words as generated: compared against on export to learn
+        corrections, and used by text edits to find a word's spoken time."""
+        self.baseline_words = words
+        self.learned_signatures = learned
+        self.timeline.reference_words = words
+        self.caption_editor.reference_words = words
 
     # ---------------------------------------------------------------- session
     def _schedule_session_save(self, *_args) -> None:

@@ -14,10 +14,11 @@ from PySide6.QtGui import QColor, QGuiApplication, QKeySequence, QPainter, QPen,
 from PySide6.QtWidgets import QLineEdit, QWidget
 
 from ..core.caption_builder import CaptionCard
+from ..core.retime import wrap_words
 from ..core.style import CaptionFormatting
 from ..core.transcribe import Word
 from ..core.waveform import BUCKETS_PER_SECOND
-from .caption_editor import rebuild_card_text
+from .caption_editor import SPLIT_HINT, rebuild_card_text
 
 RULER_H = 22
 WAVE_H = 58
@@ -64,6 +65,8 @@ class TimelineWidget(QWidget):
         self._inline_editor: QLineEdit | None = None
         self._inline_index: int | None = None
         self.scroll_area = None  # set by the main window, for cursor-anchored zoom
+        self.frame_duration = 1 / 30  # set from the clip's fps, for frame stepping
+        self.reference_words: list[Word] = []  # original Whisper words, see core.retime
 
     # -------------------------------------------------------------------- API
     def set_cards(self, cards: list[CaptionCard], formatting: CaptionFormatting) -> None:
@@ -396,27 +399,110 @@ class TimelineWidget(QWidget):
         event.accept()
 
     def _seek_to(self, x: float) -> None:
-        t = min(self._t_of(x), self.duration if self.duration else self._t_of(x))
+        self.seek_time(self._t_of(x), scroll=False)
+
+    def seek_time(self, t: float, scroll: bool = True) -> None:
+        t = max(0.0, min(t, self.duration) if self.duration else t)
         self.playhead_t = t
         self.seek_requested.emit(t)
+        if scroll and self.scroll_area is not None:
+            self.scroll_area.ensureVisible(round(self._x_of(t)), 0, 80, 0)
         self.update()
 
     # --------------------------------------------------------------- keyboard
     def keyPressEvent(self, event) -> None:  # noqa: N802
+        key, mods = event.key(), event.modifiers()
+        shift = bool(mods & Qt.ShiftModifier)
         if event.matches(QKeySequence.Copy):
             self.copy_selected()
         elif event.matches(QKeySequence.Paste):
             self.paste_into_selected()
-        elif event.key() == Qt.Key_B and event.modifiers() & Qt.ControlModifier:
-            self.split_at_playhead()
-        elif event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+        elif key in (Qt.Key_Delete, Qt.Key_Backspace):
             self.delete_selected()
-        elif event.key() == Qt.Key_Space:
+        elif key == Qt.Key_Space:
             self.play_pause_requested.emit()
+        elif key in (Qt.Key_Left, Qt.Key_Right):
+            step = 1.0 if shift else self.frame_duration
+            self.seek_time(self.playhead_t + (step if key == Qt.Key_Right else -step))
+        elif key == Qt.Key_Up:
+            self.jump_to_card(-1)
+        elif key == Qt.Key_Down:
+            self.jump_to_card(+1)
+        elif key == Qt.Key_Home:
+            self.seek_time(0.0)
+        elif key == Qt.Key_End:
+            self.seek_time(self.duration)
+        elif key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_F2):
+            if self.selected_index is not None:
+                self._open_inline_editor(self.selected_index)
+        elif key == Qt.Key_Q and not mods & Qt.ControlModifier:
+            self.trim_selected_to_playhead("start")
+        elif key == Qt.Key_W and not mods & Qt.ControlModifier:
+            self.trim_selected_to_playhead("end")
+        elif key == Qt.Key_Escape:
+            self.selected_index = None
+            self.update()
         else:
             super().keyPressEvent(event)
 
+    def _select(self, index: int) -> None:
+        self.selected_index = index
+        self.card_selected.emit(index)
+        self.update()
+
+    def jump_to_card(self, direction: int) -> None:
+        """Up/Down: select the previous/next card and put the playhead on its start."""
+        eps = 1e-3
+        order = sorted(range(len(self.cards)), key=lambda i: self.cards[i].start)
+        if direction > 0:
+            targets = [i for i in order if self.cards[i].start > self.playhead_t + eps]
+            index = targets[0] if targets else None
+        else:
+            targets = [i for i in order if self.cards[i].start < self.playhead_t - eps]
+            index = targets[-1] if targets else None
+        if index is None:
+            return
+        self._select(index)
+        self.seek_time(self.cards[index].start)
+
+    def trim_selected_to_playhead(self, edge: str) -> None:
+        """Q / W: move the selected card's start / end to the playhead,
+        overwriting whatever it then covers, like dragging the edge."""
+        i = self.selected_index
+        if i is None or i >= len(self.cards):
+            return
+        card, t = self.cards[i], self.playhead_t
+        if edge == "start" and t < card.end - MIN_CARD_DURATION:
+            self.cards[i] = replace(card, start=t)
+        elif edge == "end" and t > card.start + MIN_CARD_DURATION:
+            self.cards[i] = replace(card, end=t)
+        else:
+            return
+        self._apply_overwrite(i)
+        self.cards_changed.emit()
+        self.update()
+
+    def merge_selected_with_next(self) -> None:
+        i = self.selected_index
+        if i is None:
+            return
+        order = sorted(range(len(self.cards)), key=lambda k: self.cards[k].start)
+        pos = order.index(i)
+        if pos + 1 >= len(order):
+            return
+        a, b = self.cards[i], self.cards[order[pos + 1]]
+        merged = CaptionCard(lines=wrap_words(a.words + b.words, self.formatting),
+                             start=min(a.start, b.start), end=max(a.end, b.end))
+        self.cards[i] = merged
+        del self.cards[order[pos + 1]]
+        self.selected_index = self.cards.index(merged)
+        self.cards_changed.emit()
+        self.update()
+
     def split_at_playhead(self) -> None:
+        """Ctrl+B: splits the card under the playhead between words. Each
+        word keeps its own time, and the cut lands on the first word of the
+        second card so it appears exactly when that word is spoken."""
         t = self.playhead_t
         for i, card in enumerate(self.cards):
             if not (card.start < t < card.end):
@@ -426,8 +512,11 @@ class TimelineWidget(QWidget):
             right = [w for w in words if (w.start + w.end) / 2 >= t]
             if not left or not right:
                 return
-            first = CaptionCard(lines=[left], start=card.start, end=t)
-            second = CaptionCard(lines=[right], start=t, end=card.end)
+            cut = right[0].start
+            if not (card.start + MIN_CARD_DURATION <= cut <= card.end - MIN_CARD_DURATION):
+                cut = t
+            first = CaptionCard(lines=wrap_words(left, self.formatting), start=card.start, end=cut)
+            second = CaptionCard(lines=wrap_words(right, self.formatting), start=cut, end=card.end)
             self.cards[i:i + 1] = [first, second]
             self.selected_index = i
             self.cards_changed.emit()
@@ -466,7 +555,8 @@ class TimelineWidget(QWidget):
         if not text or self.selected_index is None or self.selected_index >= len(self.cards):
             return
         index = self.selected_index
-        self.cards[index] = rebuild_card_text(self.cards[index], text, self.formatting)
+        self.cards[index:index + 1] = rebuild_card_text(self.cards[index], text, self.formatting,
+                                                        self.reference_words)
         self.cards_changed.emit()
         self.update()
 
@@ -486,6 +576,7 @@ class TimelineWidget(QWidget):
         editor = QLineEdit(self)
         editor.setGeometry(rect.adjusted(2, 8, -2, -8))
         editor.setText(" ".join(w.text for line in card.lines for w in line))
+        editor.setToolTip(SPLIT_HINT)
         editor.selectAll()
         editor.show()
         editor.setFocus()
@@ -500,7 +591,9 @@ class TimelineWidget(QWidget):
         self._inline_editor = None
         index = self._inline_index
         if index is not None and index < len(self.cards):
-            self.cards[index] = rebuild_card_text(self.cards[index], editor.text(), self.formatting)
+            self.cards[index:index + 1] = rebuild_card_text(self.cards[index], editor.text(), self.formatting,
+                                                            self.reference_words)
             self.cards_changed.emit()
         editor.deleteLater()
+        self.setFocus()  # keep the keyboard shortcuts working after an edit
         self.update()
