@@ -14,7 +14,8 @@ from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 
 from ..core.caption_builder import CaptionCard
-from ..core.layout import caption_font, layout_card, libass_metrics, pop_scale_at
+from ..core.layout import caption_font, layout_card, pop_scale_at
+from ..core.libass_fit import libass_fit
 from ..core.style import AnimationStyle
 
 
@@ -43,10 +44,9 @@ def draw_captions(
     canvas_w, canvas_h = video_rect.width(), video_rect.height()
     font = caption_font(style, canvas_h)
     font_px = font.pixelSize()
-    # \an5 centres libass's line box (its ascent/descent, which can differ
-    # from Qt's), so the baseline sits at the same height in the export.
-    ascent, descent = libass_metrics(font)
-    baseline_offset = (ascent - descent) * font_px / 2
+    # Where libass puts the baseline below its \an5 anchor, measured, so the
+    # text sits at the same height as in the export.
+    baseline_offset = libass_fit(font).baseline * font_px
 
     positioned = layout_card(card, style, canvas_w, canvas_h)
     if not positioned:

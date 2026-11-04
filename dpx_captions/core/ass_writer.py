@@ -18,7 +18,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from .caption_builder import CaptionCard
-from .layout import ass_font_size, caption_font, layout_card
+from .layout import caption_font, layout_card
+from .libass_fit import libass_fit
 from .style import AnimationStyle
 
 
@@ -41,9 +42,10 @@ def _fmt_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def _build_style_line(style: AnimationStyle, font_px: int, ass_size: float) -> str:
+def _build_style_line(style: AnimationStyle, font_px: int, ass_size: float, scale_x: float) -> str:
     """`font_px` is the em size the preview uses (outline and shadow scale
-    with it); `ass_size` is the libass size that renders glyphs at that em."""
+    with it); `ass_size` and `scale_x` make libass draw glyphs exactly that
+    tall and wide (see core.libass_fit)."""
     outline_px = round(style.OutlineThickness * font_px) if style.OutlineEnabled else 0
     shadow_px = round(style.ShadowOffset * font_px) if style.ShadowEnabled else 0
     bold = -1 if style.Bold else 0
@@ -56,7 +58,7 @@ def _build_style_line(style: AnimationStyle, font_px: int, ass_size: float) -> s
     return (
         "Style: Caption,"
         f"{style.Font},{ass_size:.2f},{fill},{fill},{outline},{shadow},"
-        f"{bold},{italic},0,0,100,100,0,0,"
+        f"{bold},{italic},0,0,{scale_x * 100:.2f},100,0,0,"
         f"1,{outline_px},{shadow_px},5,10,10,10,1"
     )
 
@@ -77,7 +79,13 @@ def _entrance_tags(style: AnimationStyle, x: float, y: float) -> str:
     return "".join(tags)
 
 
-def _highlight_tags(style: AnimationStyle, word_start_ms: int) -> str:
+def _fscx(percent: float, scale_x: float) -> str:
+    # \fscx replaces the style's ScaleX instead of multiplying it, so every
+    # horizontal scale carries the width correction.
+    return f"\\fscx{percent * scale_x:.2f}"
+
+
+def _highlight_tags(style: AnimationStyle, word_start_ms: int, scale_x: float) -> str:
     highlight = _color(style.HighlightColorRed, style.HighlightColorGreen, style.HighlightColorBlue)
     start = max(0, word_start_ms)
     # 1ms transition == instant switch, deliberately not a \kf letter sweep.
@@ -87,8 +95,8 @@ def _highlight_tags(style: AnimationStyle, word_start_ms: int) -> str:
     if pop > 0 and style.HighlightPopScale > 1.0:
         half = max(1, pop // 2)
         peak = round(style.HighlightPopScale * 100)
-        tags.append(f"\\t({start},{start + half},\\fscx{peak}\\fscy{peak})")
-        tags.append(f"\\t({start + half},{start + 2 * half},\\fscx100\\fscy100)")
+        tags.append(f"\\t({start},{start + half},{_fscx(peak, scale_x)}\\fscy{peak})")
+        tags.append(f"\\t({start + half},{start + 2 * half},{_fscx(100, scale_x)}\\fscy100)")
 
     return "".join(tags)
 
@@ -101,6 +109,8 @@ def write_ass(
     output_path: str | Path,
 ) -> Path:
     font = caption_font(style, height)
+    fit = libass_fit(font)
+    sx = fit.scale_x
 
     lines = [
         "\n".join(
@@ -116,7 +126,7 @@ def write_ass(
                 "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
                 "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
                 "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-                _build_style_line(style, font.pixelSize(), ass_font_size(font)),
+                _build_style_line(style, font.pixelSize(), font.pixelSize() * fit.size_ratio, sx),
                 "",
                 "[Events]",
                 "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -131,9 +141,9 @@ def write_ass(
             tags = "\\an5" + _entrance_tags(style, item.center_x, item.center_y)
             if style.PopInEnabled:
                 anim_ms = max(1, round(style.AnimationLength * 1000))
-                tags += f"\\fscx60\\fscy60\\t(0,{anim_ms},\\fscx100\\fscy100)"
+                tags += f"{_fscx(60, sx)}\\fscy60\\t(0,{anim_ms},{_fscx(100, sx)}\\fscy100)"
             if style.HighlightEnabled:
-                tags += _highlight_tags(style, round((item.word.start - card.start) * 1000))
+                tags += _highlight_tags(style, round((item.word.start - card.start) * 1000), sx)
             lines.append(
                 f"Dialogue: 0,{start},{end},Caption,,0,0,0,,{{{tags}}}{item.word.text}"
             )

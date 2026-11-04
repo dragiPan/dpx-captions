@@ -77,12 +77,6 @@ def libass_metrics(font: QFont) -> tuple[float, float]:
     return _libass_metrics(font.family(), font.bold(), font.italic())
 
 
-def ass_font_size(font: QFont) -> float:
-    """The ASS Fontsize that makes libass draw glyphs the size Qt draws `font`."""
-    ascent, descent = libass_metrics(font)
-    return font.pixelSize() * (ascent + descent)
-
-
 def layout_card(
     card: CaptionCard,
     style: AnimationStyle,
