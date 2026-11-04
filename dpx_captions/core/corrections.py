@@ -348,6 +348,10 @@ def learn_from_edits(
                 report.confirmed += 1
 
     def record(src: list[Word], dst: list[tuple[Word, CaptionCard]]) -> None:
+        # Starred words are censoring ("PIČ****"), not a transcription fix;
+        # stripping the stars would learn a truncated word.
+        if any("*" in w.text for w in src) or any("*" in w.text for w, _ in dst):
+            return
         original: list[str] = []
         undone: list[str] = []
         prev = None
