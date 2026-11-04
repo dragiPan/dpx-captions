@@ -38,6 +38,15 @@ montaže — samo rad sa titlovima.
   undo/redo, pinch zoom, inercija pri skrolovanju
 - Pronađi i zameni, regrupisanje titlova iz transkripta, safe-area vodilice (uključuju se
   dugmetom), automatsko čuvanje projekata
+- **Uči iz tvojih ispravki** isto kao desktop (ista logika i isti `corrections.json`): posle
+  exporta pamti prepravke, pri sledećem generisanju ih primenjuje sama. Pregled i brisanje
+  u *Settings → Learned corrections*, gde možeš i da uvezeš `corrections.json` sa desktopa
+  (`%APPDATA%\DPX Captions\corrections.json`) da telefon odmah zna šta je desktop naučio
+- **Izmena teksta ne kvari highlight**: reči zadržavaju vreme kad su izgovorene; `|` između
+  reči deli karticu (`OVO JE | ZAISTA TAKO`), a **Split** seče tačno na početku reči
+- **My presets**: sačuvaj trenutni izgled pod imenom i vrati ga jednim dodirom (Style →
+  Presets); isti `.autosubs-preset.json` format kao desktop
+- Napredak generisanja i exporta pokazuje procenat, koliko je ostalo i oko koliko sati je gotovo
 - **Export** hardverskim koderom; snimi u galeriju (`Movies/DPX Captions`) ili podeli
 - U aplikaciju možeš da **podeliš (Share) video direktno iz galerije**
 
@@ -67,7 +76,7 @@ Zahtevi: Android 10 ili noviji, 64-bitni ARM procesor sa Armv8.2 dot-product ins
 | Pomeranje titla | prevuci izabrani blok |
 | Skraćivanje / produžavanje | prevuci belu ručku na ivici izabranog bloka |
 | Izmena teksta | izaberi blok → **Edit** |
-| Sečenje | postavi playhead unutar bloka → **Split** |
+| Sečenje | postavi playhead unutar bloka → **Split**, ili u **Edit** ukucaj `\|` između reči |
 | Novi titl | postavi playhead → **Add** |
 | Pozicija titla na ekranu | prevuci titl na preview-u |
 | Stil | **Style** (font, veličina, boje, outline, animacije, preseti) |
@@ -271,6 +280,15 @@ Crveno su zone koje prekriva interfejs mreže, žuti okvir je siguran prostor.
 **Export Video with Captions** ugrađuje titlove kroz ffmpeg, sa bitrate-om
 prilagođenim izvoru. Ako je izabran aspect ratio različit od izvornog, video se skalira
 i dopunjava crnim trakama do tog formata.
+
+Sa NVIDIA karticom video se kodira na grafičkoj (NVENC) — na RTX 4060 klip od 1:27 za oko
+8 s umesto 68 s na procesoru, istog kvaliteta u odnosu na original (SSIM 0.9947 prema
+0.9950, PSNR 50.7 prema 50.4 dB). Bez NVIDIA kartice, ili kad NVENC ne može (npr. 10-bitni
+HDR izvor), export sam prelazi na procesor (libx264).
+
+Whisper model se pri pokretanju aplikacije učita u pozadini (ako je već preuzet) i ostaje u
+memoriji, pa *Generate* odmah kreće sa transkripcijom; pored izbora modela tada piše
+"model ready".
 
 ### 7. Naučene ispravke
 

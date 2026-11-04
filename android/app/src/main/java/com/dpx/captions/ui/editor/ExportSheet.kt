@@ -113,6 +113,10 @@ fun ExportSheet(state: EditorState, onDismiss: () -> Unit) {
                     } else {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Accent, trackColor = Surface3)
                     }
+                    running.detail?.let {
+                        val percent = progress?.let { p -> "${(p * 100).toInt()}% · " } ?: ""
+                        Text(percent + it, style = MaterialTheme.typography.bodyMedium)
+                    }
                     Text(
                         "You can leave the app; the export keeps running and shows its progress in a notification.",
                         style = MaterialTheme.typography.bodySmall,
@@ -124,6 +128,9 @@ fun ExportSheet(state: EditorState, onDismiss: () -> Unit) {
                 finished?.outputPath != null -> {
                     val file = File(finished.outputPath)
                     Text("Done — ${formatBytes(file.length())}", style = MaterialTheme.typography.titleMedium, color = Accent)
+                    finished.message?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim, modifier = Modifier.testTag("learned"))
+                    }
                     Button(
                         onClick = {
                             scope.launch {

@@ -21,6 +21,13 @@ class AppContainer(val app: Application) {
     /** A Paint-holding painter isn't thread safe, so the preview and the export each get their own. */
     fun newPainter() = CaptionPainter(fonts)
 
+    private val correctionsFile = java.io.File(app.filesDir, "corrections.json")
+
+    /** A fresh copy of the learned corrections; whoever changes it saves it back. */
+    fun corrections() = CorrectionStore(correctionsFile)
+
+    val userPresets = UserPresets(java.io.File(app.filesDir, "presets"))
+
     fun cancelAllWork() {
         jobs.cancel()
         downloads.cancelAll()

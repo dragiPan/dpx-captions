@@ -130,6 +130,10 @@ fun SettingsScreen(onBack: () -> Unit) {
                 fontMessage?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = Accent) }
             }
 
+            Section("Learned corrections") {
+                LearnedCorrections()
+            }
+
             Section("Downloaded models") {
                 val downloaded = WhisperCatalog.models.filter { it.id in installed }
                 if (downloaded.isEmpty()) {

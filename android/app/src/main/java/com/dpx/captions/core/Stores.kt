@@ -9,6 +9,7 @@ import com.dpx.captions.model.CaptionCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
 import com.dpx.captions.model.Word
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -115,6 +116,30 @@ class ProjectStore(private val context: Context) {
 
     fun loadWords(id: String): List<Word>? =
         runCatching { AppJson.decodeFromString(ListSerializer(Word.serializer()), wordsFile(id).readText()) }.getOrNull()
+
+    private fun baselineFile(id: String) = File(dir(id), "baseline.json")
+
+    private fun learnedFile(id: String) = File(dir(id), "learned.json")
+
+    /**
+     * The words as generated, before the user's edits, which an export compares against to learn
+     * corrections, and the edits already learned from them. Generating again starts both afresh.
+     */
+    fun saveBaseline(id: String, words: List<Word>) {
+        baselineFile(id).writeAtomically(AppJson.encodeToString(ListSerializer(Word.serializer()), words))
+        saveLearned(id, emptySet())
+    }
+
+    fun loadBaseline(id: String): List<Word>? =
+        runCatching { AppJson.decodeFromString(ListSerializer(Word.serializer()), baselineFile(id).readText()) }.getOrNull()
+
+    fun loadLearned(id: String): MutableSet<String> =
+        runCatching { AppJson.decodeFromString(ListSerializer(String.serializer()), learnedFile(id).readText()).toMutableSet() }
+            .getOrDefault(mutableSetOf())
+
+    fun saveLearned(id: String, signatures: Set<String>) {
+        learnedFile(id).writeAtomically(AppJson.encodeToString(ListSerializer(String.serializer()), signatures.sorted()))
+    }
 
     /**
      * Copies the picked video into app storage. Gallery URIs can lose permission or vanish, and a

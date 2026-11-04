@@ -31,6 +31,11 @@ data class Word(
     val start: Double,
     val end: Double,
     val probability: Double = 1.0,
+    /**
+     * Normalised Whisper phrase this word was rewritten from by a learned correction (see
+     * core.Corrections), or null for words as Whisper wrote them. Same field as on the desktop.
+     */
+    val source: String? = null,
 )
 
 @Serializable

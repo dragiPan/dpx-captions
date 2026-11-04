@@ -140,18 +140,27 @@ class EditorState(
 
     // --- caption operations ------------------------------------------------------------------------
 
+    /**
+     * The words as generated, so an edit can find the spoken time of a word that wasn't in the card
+     * (see core.Retime). Read lazily: regenerating captions happens on another screen.
+     */
+    private var cachedReference: List<com.dpx.captions.model.Word>? = null
+    private val referenceWords: List<com.dpx.captions.model.Word>
+        get() = cachedReference ?: (container.projects.loadBaseline(project.id) ?: emptyList()).also { cachedReference = it }
+
+    /** Typing "|" between words splits the card there; each word keeps its spoken time. */
     fun editText(index: Int, text: String) {
         val card = cards.getOrNull(index) ?: return
-        val rewritten = CaptionOps.rewriteText(card, text, project.formatting)
-        if (rewritten == null) {
+        val rewritten = CaptionOps.rewriteText(card, text, project.formatting, referenceWords)
+        if (rewritten.isEmpty()) {
             deleteAt(index)
             return
         }
-        commit(cards.toMutableList().also { it[index] = rewritten }, index)
+        commit(cards.toMutableList().also { it.removeAt(index); it.addAll(index, rewritten) }, index)
     }
 
     fun splitAt(seconds: Double): Boolean {
-        val result = CaptionOps.splitAt(cards, seconds) ?: return false
+        val result = CaptionOps.splitAt(cards, seconds, project.formatting) ?: return false
         commit(result.cards, result.selected)
         return true
     }
@@ -168,7 +177,7 @@ class EditorState(
     }
 
     fun mergeWithNext(index: Int): Boolean {
-        val result = CaptionOps.mergeWithNext(cards, index) ?: return false
+        val result = CaptionOps.mergeWithNext(cards, index, project.formatting) ?: return false
         commit(result.cards, result.selected)
         return true
     }
@@ -186,9 +195,12 @@ class EditorState(
         return count
     }
 
+    /** Rebuilds the cards from the transcript, with the learned corrections applied as on Generate. */
     fun regroup(): Boolean {
         val words = container.projects.loadWords(project.id) ?: return false
-        commit(CaptionBuilder.build(words, project.formatting), null)
+        val (rebuilt, _) = container.jobs.buildWithCorrections(project.id, words, project.formatting)
+        cachedReference = null
+        commit(rebuilt, null)
         return true
     }
 

@@ -114,30 +114,34 @@ class CaptionOpsTest {
     fun rewriteKeepsTimingWhenWordCountIsUnchanged() {
         val original = card(0.0, 2.0, "STO SAT")
         val before = original.words.map { it.start }
-        val rewritten = CaptionOps.rewriteText(original, "STA SAT", formatting)!!
+        val rewritten = CaptionOps.rewriteText(original, "STA SAT", formatting).single()
         assertEquals(listOf("STA", "SAT"), rewritten.texts())
         assertEquals(before, rewritten.words.map { it.start })
     }
 
     @Test
-    fun rewriteRedistributesWhenWordCountChanges() {
-        val rewritten = CaptionOps.rewriteText(card(0.0, 3.0, "A"), "JEDAN DVA TRI", formatting)!!
-        assertEquals(listOf(0.0, 1.0, 2.0), rewritten.words.map { it.start })
+    fun rewriteWithMoreWordsStaysInsideTheReplacedWordsTime() {
+        // One word becomes three: they share that word's time, in order, instead of a fixed even split.
+        val rewritten = CaptionOps.rewriteText(card(0.0, 3.0, "A"), "JEDAN DVA TRI", formatting).single()
+        val starts = rewritten.words.map { it.start }
+        assertEquals(starts.sorted(), starts)
+        assertEquals(0.0, starts.first(), 1e-9)
+        assertEquals(3.0, rewritten.words.last().end, 1e-9)
     }
 
     @Test
     fun rewrittenTextFollowsTheProjectsCaseAndPunctuationSettings() {
         val original = card(0.0, 2.0, "A B")
-        val upper = CaptionOps.rewriteText(original, "kreatin, test", CaptionFormatting(removePunctuation = true))!!
+        val upper = CaptionOps.rewriteText(original, "kreatin, test", CaptionFormatting(removePunctuation = true)).single()
         assertEquals(listOf("KREATIN", "TEST"), upper.texts())
 
-        val untouched = CaptionOps.rewriteText(original, "kreatin, test", CaptionFormatting(textCase = TextCase.NORMAL))!!
+        val untouched = CaptionOps.rewriteText(original, "kreatin, test", CaptionFormatting(textCase = TextCase.NORMAL)).single()
         assertEquals(listOf("kreatin,", "test"), untouched.texts())
     }
 
     @Test
     fun blankTextRemovesTheCard() {
-        assertNull(CaptionOps.rewriteText(card(0.0, 1.0, "X"), "   ", formatting))
+        assertTrue(CaptionOps.rewriteText(card(0.0, 1.0, "X"), "   ", formatting).isEmpty())
     }
 
     @Test

@@ -160,6 +160,10 @@ fun HomeScreen(
                         } else {
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Accent, trackColor = Surface3)
                         }
+                        running.detail?.let {
+                            val percent = progress?.let { p -> "${(p * 100).toInt()}% · " } ?: ""
+                            Text(percent + it, style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+                        }
                     }
                 }
             }

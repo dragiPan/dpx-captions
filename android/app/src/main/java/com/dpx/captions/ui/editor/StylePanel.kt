@@ -23,15 +23,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -415,6 +421,72 @@ private fun PresetsTab(style: AnimationStyle, fonts: FontRegistry, onSet: (Anima
                 it.write(Presets.serialize(style, "DPX Captions preset"))
             }
         }.onSuccess { message = "Preset saved." }.onFailure { message = "Couldn't save the preset." }
+    }
+
+    // --- the user's own named looks ---------------------------------------------------------------
+    val userPresets = com.dpx.captions.LocalContainer.current.userPresets
+    val mine by userPresets.presets.collectAsState()
+    var naming by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<String?>(null) }
+
+    Text("My presets", style = MaterialTheme.typography.bodyMedium, color = OnSurfaceDim)
+    if (mine.isEmpty()) {
+        Text("Save the current look under a name to switch back to it in one tap.", style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+    }
+    for (preset in mine) {
+        val family = remember(preset.name, preset.style.font) { FontFamily(fonts.resolve(preset.style.font, preset.style.bold).typeface) }
+        val current = preset.style == style
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (current) Surface3 else Surface2)
+                .clickable { onSet(preset.style) }
+                .padding(start = 14.dp, top = 4.dp, bottom = 4.dp)
+                .testTag("user_preset"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (current) Icon(Icons.Default.Check, contentDescription = "In use", tint = Accent, modifier = Modifier.padding(end = 8.dp))
+            Text(preset.name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Text("SPOKEN", fontFamily = family, color = preset.style.highlight.compose(), style = MaterialTheme.typography.titleMedium)
+            IconButton(onClick = { pendingDelete = preset.name }) {
+                Icon(Icons.Default.Delete, contentDescription = "Delete ${preset.name}", tint = OnSurfaceDim)
+            }
+        }
+    }
+    Button(onClick = { naming = true }, modifier = Modifier.fillMaxWidth().testTag("save_preset_as")) { Text("Save current look as…") }
+
+    if (naming) {
+        var name by remember { mutableStateOf(mine.firstOrNull { it.style == style }?.name ?: "") }
+        AlertDialog(
+            onDismissRequest = { naming = false },
+            title = { Text("Save preset") },
+            text = {
+                Column {
+                    OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, placeholder = { Text("Name") },
+                        modifier = Modifier.fillMaxWidth().testTag("preset_name"))
+                    if (name.isNotBlank() && userPresets.exists(name)) {
+                        Text("Replaces the preset with this name.", style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = name.isNotBlank(), onClick = {
+                    userPresets.save(name, style)
+                    message = "Saved “${name.trim()}”."
+                    naming = false
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { naming = false }) { Text("Cancel") } },
+        )
+    }
+    pendingDelete?.let { name ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete “$name”?") },
+            confirmButton = { TextButton(onClick = { userPresets.delete(name); pendingDelete = null }) { Text("Delete", color = com.dpx.captions.ui.Danger) } },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } },
+        )
     }
 
     Text("Built-in looks", style = MaterialTheme.typography.bodyMedium, color = OnSurfaceDim)

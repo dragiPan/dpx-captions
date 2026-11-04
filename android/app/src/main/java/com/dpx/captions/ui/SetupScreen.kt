@@ -80,6 +80,7 @@ import kotlin.math.roundToInt
 @Composable
 fun SetupScreen(projectId: String, onBack: () -> Unit, onOpenEditor: () -> Unit) {
     val container = LocalContainer.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     val project = remember(projectId) { container.projects.load(projectId) }
     if (project == null) {
         LaunchedEffect(Unit) { onBack() }
@@ -104,6 +105,7 @@ fun SetupScreen(projectId: String, onBack: () -> Unit, onOpenEditor: () -> Unit)
     LaunchedEffect(jobState) {
         val state = jobState
         if (state is JobState.Finished && state.projectId == projectId && state.kind == JobKind.GENERATE) {
+            state.message?.let { android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_LONG).show() }
             container.jobs.acknowledge()
             onOpenEditor()
         }
@@ -197,6 +199,10 @@ fun SetupScreen(projectId: String, onBack: () -> Unit, onOpenEditor: () -> Unit)
                         LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = Accent, trackColor = Surface3)
                     } else {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Accent, trackColor = Surface3)
+                    }
+                    running.detail?.let {
+                        val percent = progress?.let { p -> "${(p * 100).toInt()}% · " } ?: ""
+                        Text(percent + it, style = MaterialTheme.typography.bodySmall, color = OnSurfaceDim)
                     }
                     OutlinedButton(onClick = { container.jobs.cancel() }, modifier = Modifier.fillMaxWidth()) {
                         Text("Cancel")

@@ -15,41 +15,26 @@ object CaptionOps {
     data class Result(val cards: List<CaptionCard>, val selected: Int?)
 
     /**
-     * Rewrites a card's text. When the word count is unchanged the original word timings are kept,
-     * so fixing a misheard word doesn't disturb when its highlight lands. Otherwise timing is spread
-     * evenly over the card. Returns null when the text is blank (the card should be removed).
+     * Rewrites a card's text, keeping every word on its spoken time (see [Retime]): kept words keep
+     * their timing, fixed ones take the time of what they replace, and a word that wasn't in the card
+     * is looked up in [reference] (the original transcript). Typing "|" between words splits the card
+     * there. Returns the resulting card(s); an empty list means the text was blank (remove the card).
      */
-    fun rewriteText(card: CaptionCard, newText: String, f: CaptionFormatting): CaptionCard? {
+    fun rewriteText(
+        card: CaptionCard,
+        newText: String,
+        f: CaptionFormatting,
+        reference: List<Word> = emptyList(),
+    ): List<CaptionCard> {
         // Typed text gets the same case / punctuation / censoring treatment as generated captions, so a
         // caption typed in lowercase doesn't stand out in a project set to uppercase.
-        val tokens = newText.trim().split(Regex("\\s+"))
-            .filter { it.isNotEmpty() }
-            .map { CaptionBuilder.displayWord(Word(it, 0.0, 0.0), f).text }
-            .filter { it.isNotEmpty() }
-        if (tokens.isEmpty()) return null
-
-        val old = card.words
-        val words: List<Word> = if (tokens.size == old.size) {
-            old.mapIndexed { i, w -> w.copy(text = tokens[i]) }
-        } else {
-            val span = maxOf(card.end - card.start, 0.01)
-            val step = span / tokens.size
-            tokens.mapIndexed { i, t -> Word(t, card.start + i * step, card.start + (i + 1) * step) }
+        val parts = newText.split(Retime.SPLIT_MARK).map { part ->
+            part.trim().split(Regex("\\s+"))
+                .filter { it.isNotEmpty() }
+                .map { CaptionBuilder.displayWord(Word(it, 0.0, 0.0), f).text }
+                .filter { it.isNotEmpty() }
         }
-
-        val maxChars = if (f.maxCharsPerLine > 0) f.maxCharsPerLine else 17
-        val maxLines = maxOf(1, f.lineCount)
-        val lines = mutableListOf(mutableListOf<Word>())
-        for (w in words) {
-            val line = lines.last()
-            val tentative = line.sumOf { it.text.length } + w.text.length + line.size
-            if (line.isNotEmpty() && tentative > maxChars && lines.size < maxLines) {
-                lines.add(mutableListOf(w))
-            } else {
-                line.add(w)
-            }
-        }
-        return CaptionCard(lines.filter { it.isNotEmpty() }.map { it.toList() }, card.start, card.end)
+        return Retime.rebuild(card, parts, f, reference)
     }
 
     /**
@@ -73,8 +58,12 @@ object CaptionOps {
         return Result(kept, kept.indexOf(edited))
     }
 
-    /** Cuts the card under [time] in two, sharing words by their midpoint. */
-    fun splitAt(cards: List<CaptionCard>, time: Double): Result? {
+    /**
+     * Cuts the card under [time] in two between words, sharing them by their midpoint. Every word keeps
+     * its own time, and the cut lands on the first word of the second card, so it appears exactly when
+     * that word is spoken instead of mid-word at the playhead.
+     */
+    fun splitAt(cards: List<CaptionCard>, time: Double, f: CaptionFormatting = CaptionFormatting()): Result? {
         val i = cards.indexOfFirst { it.start < time && time < it.end }
         if (i < 0) return null
 
@@ -84,9 +73,11 @@ object CaptionOps {
         val right = words.filter { (it.start + it.end) / 2 >= time }
         if (left.isEmpty() || right.isEmpty()) return null
 
+        val snapped = right.first().start
+        val cut = if (snapped >= card.start + MIN_CARD_DURATION && snapped <= card.end - MIN_CARD_DURATION) snapped else time
         val result = cards.toMutableList()
-        result[i] = CaptionCard(listOf(left), card.start, time)
-        result.add(i + 1, CaptionCard(listOf(right), time, card.end))
+        result[i] = CaptionCard(Retime.wrapWords(left, f), card.start, cut)
+        result.add(i + 1, CaptionCard(Retime.wrapWords(right, f), cut, card.end))
         return Result(result, i)
     }
 
@@ -109,10 +100,11 @@ object CaptionOps {
         return applyOverwrite(withCopy, index + 1)
     }
 
-    fun mergeWithNext(cards: List<CaptionCard>, index: Int): Result? {
+    /** Words keep their times; lines are re-wrapped to the project's layout. */
+    fun mergeWithNext(cards: List<CaptionCard>, index: Int, f: CaptionFormatting = CaptionFormatting()): Result? {
         val a = cards.getOrNull(index) ?: return null
         val b = cards.getOrNull(index + 1) ?: return null
-        val merged = CaptionCard(a.lines + b.lines, a.start, b.end)
+        val merged = CaptionCard(Retime.wrapWords(a.words + b.words, f), a.start, b.end)
         val result = cards.toMutableList()
         result[index] = merged
         result.removeAt(index + 1)

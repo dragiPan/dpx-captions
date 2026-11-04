@@ -49,7 +49,8 @@ fun EditTextDialog(initial: String, onSave: (String) -> Unit, onDismiss: () -> U
                     keyboardActions = KeyboardActions(onDone = { onSave(value.text) }),
                 )
                 Text(
-                    "Leave it empty to delete the caption.",
+                    "Type | between words to split the caption there (OVO JE | ZAISTA TAKO). " +
+                        "Words keep their spoken timing. Leave it empty to delete the caption.",
                     style = MaterialTheme.typography.bodySmall,
                     color = OnSurfaceDim,
                     modifier = Modifier.padding(top = 8.dp),
