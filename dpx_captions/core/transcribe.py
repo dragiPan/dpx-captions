@@ -74,6 +74,7 @@ def transcribe(
     vocabulary_context: str = "",
     backend: ComputeBackend | None = None,
     progress_cb: Callable[[float], None] | None = None,
+    model_loaded_cb: Callable[[], None] | None = None,
 ) -> list[TranscriptSegment]:
     """Transcribe Serbian audio and return word-level segments, Latin script.
 
@@ -82,6 +83,8 @@ def transcribe(
     terminology, etc.).
     """
     model = load_model(model_size, backend)
+    if model_loaded_cb:
+        model_loaded_cb()
     segments_iter, info = model.transcribe(
         load_wav_samples(audio_path),
         language="sr",

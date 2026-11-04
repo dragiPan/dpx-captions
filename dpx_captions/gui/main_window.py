@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -29,13 +30,14 @@ from ..core import ffmpeg_util
 from ..core.corrections import CorrectionStore, baseline_from_cards, learn_from_edits
 from ..core.gpu import detect_compute_backend
 from ..core.history import History
-from ..core.project import PROJECT_SUFFIX, load_project, save_project, session_path
+from ..core.project import PROJECT_SUFFIX, autosave_path, load_project, save_project, session_path
 from ..core.settings import load_settings, save_settings
 from ..core.style import TextCase
 from ..core.transcribe import MODEL_SIZES
 from .caption_editor import CaptionEditorWidget
 from .corrections_dialog import CorrectionsDialog
 from .find_replace import FindReplaceDialog, replace_in_cards
+from .progress import ProgressReporter
 from .style_panel import StylePanel
 from .timeline_widget import TimelineWidget
 from .video_preview import VideoPreviewWidget
@@ -43,7 +45,8 @@ from .workers import ExportWorker, GenerateWorker, WaveformWorker, run_in_thread
 
 TIMELINE_SCROLL_HEIGHT = 160
 
-SHORTCUTS_HELP = """Anywhere
+SHORTCUTS_HELP = """Anywhere (except while typing)
+  Space           Play / pause
   Ctrl+B          Cut the card at the playhead (between words)
   Ctrl+M          Merge the selected card with the next one
   Ctrl+N          New card at the playhead
@@ -54,8 +57,12 @@ SHORTCUTS_HELP = """Anywhere
   Ctrl+E          Export video
   F1              This list
 
+Subtitles list
+  Click a row     Jump to that card
+  Enter           Edit the selected card's text; Enter again saves it
+  Esc             Cancel the edit
+
 Timeline (click it first)
-  Space           Play / pause
   ← / →           Previous / next frame
   Shift+← / →     1 second back / forward
   ↑ / ↓           Previous / next card
@@ -126,6 +133,7 @@ class MainWindow(QWidget):
             (QKeySequence.Undo, self._on_undo),
             (QKeySequence.Redo, self._on_redo),
             (QKeySequence("Ctrl+Y"), self._on_redo),
+            (QKeySequence("Space"), self._unless_typing(self.video_preview.toggle_play)),
             (QKeySequence("Ctrl+B"), self._unless_typing(lambda: self.timeline.split_at_playhead())),
             (QKeySequence("Ctrl+M"), self._unless_typing(lambda: self.timeline.merge_selected_with_next())),
             (QKeySequence("Ctrl+N"), self._unless_typing(self._on_add_card)),
@@ -145,7 +153,7 @@ class MainWindow(QWidget):
         """Card edits must not run while a caption's text is being typed:
         the cell editor would then commit into a card that has moved."""
         def run():
-            if not isinstance(QApplication.focusWidget(), (QLineEdit, QPlainTextEdit, QTextEdit)):
+            if not isinstance(QApplication.focusWidget(), (QLineEdit, QPlainTextEdit, QTextEdit, QAbstractSpinBox)):
                 action()
         return run
 
@@ -179,6 +187,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.progress_bar)
         self.progress_label = QLabel("")
         layout.addWidget(self.progress_label)
+        self.progress = ProgressReporter(self.progress_bar, self.progress_label, self)
 
         layout.addStretch(1)
         scroll.setWidget(container)
@@ -306,6 +315,7 @@ class MainWindow(QWidget):
         self.caption_editor = CaptionEditorWidget()
         self.caption_editor.cards_changed.connect(self._on_editor_cards_changed)
         self.caption_editor.add_card_requested.connect(self._on_add_card)
+        self.caption_editor.row_activated.connect(self._on_editor_row_activated)
         layout.addWidget(self.caption_editor, 1)
 
         export_row = QHBoxLayout()
@@ -334,9 +344,37 @@ class MainWindow(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self, "Choose Video", self.last_directory, "Video Files (*.mp4 *.mov *.mkv *.avi)"
         )
-        if not path:
+        if not path or path == self.video_path:
             return
+        # Keep the clip being left, then bring back this clip's own work if
+        # it was edited before.
+        self._session_timer.stop()
+        self._save_session()
+        data = self._load_autosave(path)
+        if data and data["cards"]:
+            self._apply_project(data)
+            return
+
+        # A new clip starts without the previous clip's captions; the style
+        # stays, so it carries over.
+        self.cards = []
+        self._set_baseline([], set())
+        self.history.reset(self.cards)
+        self._update_history_buttons()
+        self._push_cards_everywhere()
+        self.export_btn.setEnabled(False)
+        self.progress_label.setText("")
         self._load_video(path)
+
+    @staticmethod
+    def _load_autosave(video_path: str) -> dict | None:
+        path = autosave_path(video_path)
+        if not path.exists():
+            return None
+        try:
+            return load_project(path)
+        except Exception:  # noqa: BLE001 - an unreadable autosave just means starting fresh
+            return None
 
     def _load_video(self, path: str) -> None:
         self.video_path = path
@@ -370,19 +408,13 @@ class MainWindow(QWidget):
         formatting = self.style_panel.formatting
 
         self.generate_btn.setEnabled(False)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
+        self.progress.start("Generating")
 
         self.generate_worker = GenerateWorker(self.video_path, formatting, model_size, self.backend)
-        self.generate_worker.progress.connect(self._on_generate_progress)
+        self.generate_worker.progress.connect(self.progress.update)
         self.generate_worker.finished.connect(self._on_generate_finished)
         self.generate_worker.failed.connect(self._on_generate_failed)
         self.generate_thread = run_in_thread(self.generate_worker)
-
-    def _on_generate_progress(self, stage: str, frac: float) -> None:
-        self.progress_bar.setValue(int(frac * 100))
-        self.progress_label.setText(stage.replace("_", " ").title())
 
     def _on_generate_finished(self, result) -> None:
         self.video_info = result.video_info
@@ -393,17 +425,16 @@ class MainWindow(QWidget):
         self._push_cards_everywhere()
         self.timeline.set_duration(result.video_info.duration)
         self.video_preview.set_style(self.style_panel.style)
-        self.progress_bar.setVisible(False)
         self.generate_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
         self.timeline.setFocus()
         applied = len(result.applied_corrections)
-        self.progress_label.setText(
-            f"Done - applied {applied} learned correction(s)" if applied else "Done"
+        self.progress.finish(
+            f"Captions ready - applied {applied} learned correction(s)" if applied else "Captions ready"
         )
 
     def _on_generate_failed(self, message: str) -> None:
-        self.progress_bar.setVisible(False)
+        self.progress.finish()
         self.generate_btn.setEnabled(True)
         QMessageBox.critical(self, "Transcription failed", message)
 
@@ -470,6 +501,14 @@ class MainWindow(QWidget):
 
     def _on_timeline_card_selected(self, index: int) -> None:
         self.caption_editor.select_row(index)
+
+    def _on_editor_row_activated(self, index: int) -> None:
+        """Picking a row in the list selects that card and moves the playhead
+        to it, so Space plays it straight away."""
+        if not 0 <= index < len(self.cards):
+            return
+        self.timeline.selected_index = index
+        self.timeline.seek_time(self.cards[index].start)
 
     def _on_add_card(self) -> None:
         self.timeline.add_card_at_playhead()
@@ -556,17 +595,21 @@ class MainWindow(QWidget):
             self._session_timer.start()
 
     def _save_session(self) -> None:
+        try:
+            self._save_settings()  # the style carries over to the next clips
+        except Exception:  # noqa: BLE001
+            pass
         if not self.video_path:
             return
         try:
-            path = session_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            save_project(
-                path, self.video_path, MODEL_SIZES[self.model_combo.currentText()],
-                self.style_panel.formatting, self.style_panel.style, self.cards,
-                self.video_preview.aspect(), self.baseline_words, self.learned_signatures,
-                self.timeline.playhead_t,
-            )
+            for path in (session_path(), autosave_path(self.video_path)):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                save_project(
+                    path, self.video_path, MODEL_SIZES[self.model_combo.currentText()],
+                    self.style_panel.formatting, self.style_panel.style, self.cards,
+                    self.video_preview.aspect(), self.baseline_words, self.learned_signatures,
+                    self.timeline.playhead_t,
+                )
         except Exception:  # noqa: BLE001 - autosave must never interrupt editing
             pass
 
@@ -648,20 +691,19 @@ class MainWindow(QWidget):
             return
 
         self.export_btn.setEnabled(False)
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)  # indeterminate; ffmpeg burn-in has no easy progress hook here
+        self.progress.start("Exporting")
 
         self.export_worker = ExportWorker(
             self.video_path, self.cards, self.style_panel.style, self.video_info, out_path,
             self.video_preview.aspect(),
         )
+        self.export_worker.progress.connect(self.progress.update)
         self.export_worker.finished.connect(self._on_export_finished)
         self.export_worker.failed.connect(self._on_export_failed)
         self.export_thread = run_in_thread(self.export_worker)
 
     def _on_export_finished(self, out_path: str) -> None:
-        self.progress_bar.setVisible(False)
-        self.progress_bar.setRange(0, 100)
+        self.progress.finish(f"Exported {Path(out_path).name}")
         self.export_btn.setEnabled(True)
         QMessageBox.information(self, "Export complete", f"Saved to:\n{out_path}{self._learn_from_export()}")
 
@@ -700,7 +742,6 @@ class MainWindow(QWidget):
         CorrectionsDialog(CorrectionStore.load(), self).exec()
 
     def _on_export_failed(self, message: str) -> None:
-        self.progress_bar.setVisible(False)
-        self.progress_bar.setRange(0, 100)
+        self.progress.finish()
         self.export_btn.setEnabled(True)
         QMessageBox.critical(self, "Export failed", message)

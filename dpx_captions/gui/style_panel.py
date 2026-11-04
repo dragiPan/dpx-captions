@@ -3,6 +3,8 @@ censor options, and the AutoSubs-compatible animation style editor."""
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
@@ -13,8 +15,10 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSlider,
@@ -26,7 +30,7 @@ from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontInfo
 
 from ..core.fonts import app_fonts_dir
-
+from ..core.presets import apply_layout, delete_preset, layout_of, list_presets, load_preset, save_preset
 from ..core.style import AnimationStyle, CaptionFormatting, Density, TextCase
 
 
@@ -276,6 +280,10 @@ class StylePanel(QWidget):
         dialog.exec()
 
     def _on_fonts_installed(self) -> None:
+        # New font files can change which file libass picks for a family.
+        from ..core.libass_fit import forget
+
+        forget()
         # Re-select the configured family: it may exist now that new font
         # files have been registered with Qt.
         self.font_combo.blockSignals(True)
@@ -316,15 +324,99 @@ class StylePanel(QWidget):
 
     # ----------------------------------------------------------------- Preset
     def _build_preset_group(self) -> QGroupBox:
-        box = QGroupBox("AutoSubs Preset")
-        row = QHBoxLayout(box)
-        load_btn = QPushButton("Load .autosubs-preset.json")
-        save_btn = QPushButton("Save preset")
+        """Named presets: the current style always carries over to the next
+        clip; a preset is a saved look to switch back to in one click."""
+        box = QGroupBox("Presets")
+        layout = QVBoxLayout(box)
+
+        row = QHBoxLayout()
+        self.preset_combo = QComboBox()
+        self.preset_combo.setToolTip("Pick a saved look. Whatever is set here is also used for the next clips.")
+        self.preset_combo.activated.connect(self._on_preset_picked)
+        row.addWidget(self.preset_combo, 1)
+        save_as_btn = QPushButton("Save as...")
+        save_as_btn.setToolTip("Save the current style and text layout as a named preset")
+        save_as_btn.clicked.connect(self._save_named_preset)
+        self.delete_preset_btn = QPushButton("Delete")
+        self.delete_preset_btn.clicked.connect(self._delete_named_preset)
+        row.addWidget(save_as_btn)
+        row.addWidget(self.delete_preset_btn)
+        layout.addLayout(row)
+
+        file_row = QHBoxLayout()
+        load_btn = QPushButton("Import .autosubs-preset.json")
+        save_btn = QPushButton("Export preset file")
         load_btn.clicked.connect(self._load_preset)
         save_btn.clicked.connect(self._save_preset)
-        row.addWidget(load_btn)
-        row.addWidget(save_btn)
+        file_row.addWidget(load_btn)
+        file_row.addWidget(save_btn)
+        layout.addLayout(file_row)
+
+        self.changed.connect(self._sync_preset_combo)
+        self._reload_preset_combo()
         return box
+
+    def _reload_preset_combo(self) -> None:
+        self._presets: dict[str, tuple[dict, dict]] = {}
+        for name in list_presets():
+            try:
+                style, layout = load_preset(name)
+            except (OSError, ValueError, TypeError):
+                continue
+            self._presets[name] = (asdict(style), layout)
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.clear()
+        self.preset_combo.addItem("Current style (not saved)", None)
+        for name in self._presets:
+            self.preset_combo.addItem(name, name)
+        self.preset_combo.blockSignals(False)
+        self._sync_preset_combo()
+
+    def _sync_preset_combo(self) -> None:
+        """Shows the preset the current settings match, if any."""
+        style, layout = asdict(self.style), layout_of(self.formatting)
+        index = 0
+        for i in range(1, self.preset_combo.count()):
+            p_style, p_layout = self._presets[self.preset_combo.itemData(i)]
+            if p_style == style and all(layout.get(k) == v for k, v in p_layout.items()):
+                index = i
+                break
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.setCurrentIndex(index)
+        self.preset_combo.blockSignals(False)
+        self.delete_preset_btn.setEnabled(index > 0)
+
+    def _on_preset_picked(self, index: int) -> None:
+        name = self.preset_combo.itemData(index)
+        if not name:
+            return
+        try:
+            style, layout = load_preset(name)
+        except (OSError, ValueError, TypeError) as exc:
+            QMessageBox.warning(self, "Preset", f"Could not load '{name}': {exc}")
+            self._reload_preset_combo()
+            return
+        self.apply_settings(style, apply_layout(self.formatting, layout))
+
+    def _save_named_preset(self) -> None:
+        current = self.preset_combo.currentData() or ""
+        name, ok = QInputDialog.getText(self, "Save preset", "Preset name:", text=current)
+        name = name.strip()
+        if not ok or not name:
+            return
+        if name in list_presets() and name != current:
+            if QMessageBox.question(self, "Save preset", f"Replace the preset '{name}'?") != QMessageBox.Yes:
+                return
+        save_preset(name, self.style, self.formatting)
+        self._reload_preset_combo()
+
+    def _delete_named_preset(self) -> None:
+        name = self.preset_combo.currentData()
+        if not name:
+            return
+        if QMessageBox.question(self, "Delete preset", f"Delete the preset '{name}'?") == QMessageBox.Yes:
+            delete_preset(name)
+            self._reload_preset_combo()
 
     def _load_preset(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Load AutoSubs Preset", "", "AutoSubs Preset (*.json)")

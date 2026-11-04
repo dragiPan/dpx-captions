@@ -4,6 +4,7 @@ and resumed without re-transcribing."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import asdict
@@ -107,3 +108,11 @@ def session_path() -> Path:
     """The autosaved last session, restored when the app starts."""
     base = os.environ.get("APPDATA") or str(Path.home())
     return Path(base) / "DPX Captions" / f"session{PROJECT_SUFFIX}"
+
+
+def autosave_path(video_path: str) -> Path:
+    """Per-clip autosave, so reopening a clip brings its captions back even
+    after working on other clips in between."""
+    base = os.environ.get("APPDATA") or str(Path.home())
+    key = hashlib.sha1(os.path.normcase(os.path.abspath(video_path)).encode("utf-8")).hexdigest()[:16]
+    return Path(base) / "DPX Captions" / "autosave" / f"{key}{PROJECT_SUFFIX}"

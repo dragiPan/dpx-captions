@@ -52,6 +52,7 @@ SPLIT_HINT = 'Tip: type "|" between words to split the card there, e.g. "OVO JE 
 class CaptionEditorWidget(QWidget):
     cards_changed = Signal()
     add_card_requested = Signal()
+    row_activated = Signal(int)  # the user moved to a row (click or arrow keys)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -85,6 +86,8 @@ class CaptionEditorWidget(QWidget):
         self.merge_btn.clicked.connect(self._merge_selected)
         self.delete_btn.clicked.connect(self._delete_selected)
         self.table.itemChanged.connect(self._on_text_changed)
+        self._selecting = False  # set while the row is selected from code
+        self.table.currentCellChanged.connect(self._on_current_cell_changed)
         # Filtered on the table itself: while a cell is being edited the key
         # events go to the cell editor instead, so in-cell copy/paste still
         # behaves normally.
@@ -98,7 +101,16 @@ class CaptionEditorWidget(QWidget):
             if event.matches(QKeySequence.Paste):
                 self._paste_into_selected()
                 return True
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.table.state() != QAbstractItemView.EditingState:
+                row = self.table.currentRow()
+                if 0 <= row < self.table.rowCount():
+                    self.table.editItem(self.table.item(row, COL_TEXT))
+                return True
         return super().eventFilter(obj, event)
+
+    def _on_current_cell_changed(self, row: int, _col: int, prev_row: int, _prev_col: int) -> None:
+        if not self._selecting and row != prev_row and 0 <= row < len(self.cards):
+            self.row_activated.emit(row)
 
     def _copy_selected(self) -> None:
         rows = self._selected_rows()
@@ -193,5 +205,9 @@ class CaptionEditorWidget(QWidget):
 
     def select_row(self, index: int) -> None:
         if 0 <= index < self.table.rowCount():
-            self.table.selectRow(index)
-            self.table.scrollToItem(self.table.item(index, COL_TEXT))
+            self._selecting = True
+            try:
+                self.table.selectRow(index)
+                self.table.scrollToItem(self.table.item(index, COL_TEXT))
+            finally:
+                self._selecting = False

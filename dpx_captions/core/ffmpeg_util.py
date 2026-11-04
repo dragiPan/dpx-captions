@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -123,12 +124,14 @@ def burn_captions(
     output_path: str,
     info: VideoInfo,
     canvas: tuple[int, int] | None = None,
+    progress_cb=None,
 ) -> None:
     """Burns the .ass captions into the video, re-encoding at a bitrate
     matched to the source so exported quality stays close to the original.
 
     `canvas` pads the source into a different target aspect before the
-    captions are drawn, matching what the preview shows.
+    captions are drawn, matching what the preview shows. `progress_cb`
+    receives the encoded fraction (0..1) as ffmpeg reports it.
     """
     ass_escaped = _escape_filter_path(ass_path)
     target_bitrate = info.bit_rate or int(info.width * info.height * info.fps * 0.08)
@@ -147,7 +150,7 @@ def burn_captions(
     filters.append(ass_filter)
 
     cmd = [
-        ffmpeg_path(), "-y", "-i", video_path,
+        ffmpeg_path(), "-y", "-v", "error", "-nostats", "-progress", "pipe:1", "-i", video_path,
         "-vf", ",".join(filters),
         "-c:v", "libx264", "-preset", "medium",
         "-b:v", str(target_bitrate), "-maxrate", str(int(target_bitrate * 1.5)),
@@ -155,4 +158,19 @@ def burn_captions(
         "-c:a", "copy",
         output_path,
     ]
-    subprocess.run(cmd, check=True, capture_output=True, creationflags=_NO_WINDOW)
+    # stderr goes to a file: with only stdout drained, a chatty stderr pipe
+    # could fill up and stall ffmpeg.
+    with tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, creationflags=_NO_WINDOW,
+                                text=True, encoding="utf-8", errors="replace")
+        for line in proc.stdout:
+            key, _, value = line.strip().partition("=")
+            if progress_cb and key == "out_time_us" and info.duration > 0 and value.isdigit():
+                progress_cb(min(int(value) / 1e6 / info.duration, 1.0))
+        proc.wait()
+        if proc.returncode != 0:
+            err.seek(0)
+            message = err.read().decode("utf-8", "replace").strip()
+            raise RuntimeError(f"ffmpeg failed ({proc.returncode}): {message[-800:]}")
+    if progress_cb:
+        progress_cb(1.0)

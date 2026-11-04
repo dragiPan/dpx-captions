@@ -419,8 +419,6 @@ class TimelineWidget(QWidget):
             self.paste_into_selected()
         elif key in (Qt.Key_Delete, Qt.Key_Backspace):
             self.delete_selected()
-        elif key == Qt.Key_Space:
-            self.play_pause_requested.emit()
         elif key in (Qt.Key_Left, Qt.Key_Right):
             step = 1.0 if shift else self.frame_duration
             self.seek_time(self.playhead_t + (step if key == Qt.Key_Right else -step))

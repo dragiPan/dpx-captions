@@ -56,6 +56,7 @@ class WaveformWorker(QObject):
 
 
 class ExportWorker(QObject):
+    progress = Signal(str, float)
     finished = Signal(str)
     failed = Signal(str)
 
@@ -72,7 +73,8 @@ class ExportWorker(QObject):
     def run(self) -> None:
         try:
             pipeline.export_video(self.video_path, self.cards, self.style, self.video_info,
-                                  self.output_path, self.aspect)
+                                  self.output_path, self.aspect,
+                                  progress_cb=lambda stage, frac: self.progress.emit(stage, frac))
             self.finished.emit(self.output_path)
         except Exception as exc:
             self.failed.emit(str(exc))

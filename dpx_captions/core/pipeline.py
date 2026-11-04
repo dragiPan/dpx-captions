@@ -47,7 +47,7 @@ def generate_captions(
     ffmpeg_util.extract_audio(video_path, str(audio_path))
 
     if progress_cb:
-        progress_cb("transcribing", 0.0)
+        progress_cb("loading_model", 0.0)
 
     def _tcb(frac: float):
         if progress_cb:
@@ -59,6 +59,7 @@ def generate_captions(
         vocabulary_context=formatting.vocabulary_context,
         backend=backend,
         progress_cb=_tcb,
+        model_loaded_cb=lambda: _tcb(0.0),
     )
     words = flatten_words(segments)
 
@@ -82,6 +83,7 @@ def export_video(
     video_info: ffmpeg_util.VideoInfo,
     output_path: str,
     aspect: Aspect = Aspect.AUTO,
+    progress_cb: Callable[[str, float], None] | None = None,
 ) -> str:
     if not ffmpeg_util.supports_ass_filter():
         raise RuntimeError(
@@ -92,6 +94,8 @@ def export_video(
 
     from .ass_writer import write_ass
 
+    if progress_cb:
+        progress_cb("preparing_captions", 0.0)
     canvas = canvas_size(video_info.width, video_info.height, aspect)
 
     tmp_dir = Path(tempfile.gettempdir()) / "dpx_captions"
@@ -99,5 +103,10 @@ def export_video(
     ass_path = tmp_dir / (Path(video_path).stem + ".ass")
     write_ass(cards, style, canvas[0], canvas[1], ass_path)
 
-    ffmpeg_util.burn_captions(video_path, str(ass_path), output_path, video_info, canvas)
+    if progress_cb:
+        progress_cb("encoding", 0.0)
+    ffmpeg_util.burn_captions(
+        video_path, str(ass_path), output_path, video_info, canvas,
+        progress_cb=(lambda frac: progress_cb("encoding", frac)) if progress_cb else None,
+    )
     return output_path

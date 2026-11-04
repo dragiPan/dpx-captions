@@ -199,7 +199,17 @@ Open Sans) u `fonts/` folder — odatle ih koriste i preview i export.
 Ostalo: veličina, pozicija, boja teksta i highlight-a, bold, debljina outline-a,
 udaljenost senke, jačina pop animacije, i ulazne animacije (Pop in / Slide up / Fade).
 
-AutoSubs preset se učitava i snima dugmadima na dnu panela.
+**Stil se prenosi na sledeće klipove**: šta god je podešeno u panelu koristi se i za
+svaki sledeći klip, i pamti se odmah (ne tek pri zatvaranju). **Presets** na dnu panela
+čuvaju izgled pod imenom — stil i raspored teksta (gustina, znakova po redu, redovi,
+velika slova, interpunkcija); vokabular i lista za cenzuru se ne menjaju. *Save as...*
+snima trenutni izgled, izbor iz liste ga vraća jednim klikom, *Delete* ga briše. Preseti
+su u `%APPDATA%\DPX Captions\presets\` kao obični `.autosubs-preset.json` fajlovi;
+*Import* / *Export preset file* rade sa AutoSubs fajlovima bilo gde na disku.
+
+Export izgleda isto kao preview: pri prvom exportu nekim fontom program izmeri kako ga
+ffmpeg/libass crta (visina, širina, osnovna linija) i prema tome podesi veličinu, jer Qt i
+libass za isto ime fonta ponekad uzmu različite fajlove sa različitim merama.
 
 ### 5. Generisanje i izmene
 
@@ -231,9 +241,14 @@ Timeline (ispod preview-a):
 | Generate / Export | `Ctrl+G` / `Ctrl+E` |
 | Spisak prečica | `F1` ili dugme `?` |
 
-Tasteri bez `Ctrl` (strelice, `Q`/`W`, `Space`, `Enter`...) rade kada je timeline aktivan
-(klikni na njega); `Ctrl` prečice rade bilo gde. Na granici dva bloka hvata se onaj sa
-čije strane je kursor.
+`Space` (play/pauza) i `Ctrl` prečice rade bilo gde osim dok kucaš tekst. Strelice,
+`Q`/`W`, `Enter`/`F2` na timeline-u rade kada je timeline aktivan (klikni na njega). U
+tabeli **Subtitles**: klik na red (ili strelice) pomera playhead na tu karticu, `Enter`
+otvara izmenu teksta, drugi `Enter` je potvrđuje — odmah zatim `Space` pušta klip. Na
+granici dva bloka hvata se onaj sa čije strane je kursor.
+
+Progress ispod dugmeta Generate pokazuje korak koji traje, procenat, koliko je približno
+ostalo i oko koliko sati će biti gotovo — i za transkripciju i za export.
 
 **Highlight prati zvuk i posle izmena.** Svaka reč čuva vreme kada je izgovorena:
 kad promeniš tekst kartice, reči koje ostaju zadržavaju svoje vreme, ispravljena (ili
@@ -275,6 +290,14 @@ exporta prikazuje šta je novo naučeno.
 
 - Poređenje ne razlikuje velika i mala slova i ignoriše interpunkciju. Zarez ili tačka
   iz Whisper-ovog teksta ostaju na mestu i posle ispravke.
+- **Pravopisne ispravke važe svuda** (jedna reč u sličnu: zahtjeva → zahteva; ili
+  spajanje: dobit ćeš → dobićeš). **Izmene koje zavise od rečenice uče se sa karticom**:
+  deljenje reči (retko *koji* → retko *ko i*), zamena potpuno drugom rečju, ili izmena
+  kratke reči (≤ 3 slova). Pamti se kartica oko izmene — samo reči koje si ostavio, ne one
+  koje si obrisao ili premestio — pa se pravilo primenjuje samo kad se ponovi isti izraz.
+  Kontekstna pravila se pamte u već ispravljenom obliku ("retko koji" i kad je Whisper
+  napisao "redko koji") i primenjuju se posle pravopisnih. U *Learned corrections* kolona
+  *Applies* pokazuje "everywhere" ili "only in this phrase".
 - Izmena se računa samo ako je na istom mestu u vremenu kao generisani tekst, tako da
   pomeranje, brisanje ili dodavanje kartica ne pravi pogrešna pravila. Obrisane reči
   (npr. poštapalice) se ne pamte kao ispravke.
@@ -299,6 +322,10 @@ Poslednja sesija se čuva sama (oko sekunde posle svake izmene i pri zatvaranju)
 klip sa svim titlovima, stilom, aspect ratio-m i pozicijom playhead-a — ako taj klip i
 dalje postoji na istom mestu; ako ne postoji, aplikacija kreće prazna. Undo istorija se
 ne pamti između pokretanja.
+
+Rad se pamti i **za svaki klip posebno**: kad izabereš drugi klip, prethodni ostaje
+sačuvan, a kad se vratiš na klip na kom si već radio, vraćaju se njegovi titlovi. Nov klip
+kreće bez titlova, sa trenutnim stilom.
 
 ## Podešavanja
 

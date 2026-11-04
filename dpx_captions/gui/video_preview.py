@@ -177,6 +177,10 @@ class VideoPreviewWidget(QWidget):
         self._last_emit_t = -1.0
         self._laid_out = False
         self._pending_seek: float | None = None
+        # The exact time last sought to while paused. The player lands on the
+        # frame at or before it (3.000 s for 3.02 s), which would put the
+        # playhead - and the caption shown - on the previous card.
+        self._seek_target: float | None = None
 
     # -------------------------------------------------------------------- API
     def load_video(self, path: str) -> None:
@@ -204,6 +208,7 @@ class VideoPreviewWidget(QWidget):
         self._relayout_scene()
 
     def seek(self, seconds: float) -> None:
+        self._seek_target = seconds if self.player.playbackState() != QMediaPlayer.PlayingState else None
         self.player.setPosition(round(seconds * 1000))
         self.caption_item.set_time(seconds)
 
@@ -267,6 +272,9 @@ class VideoPreviewWidget(QWidget):
         if start_us < 0:
             return
         t = start_us / 1_000_000.0
+        target = self._seek_target
+        if target is not None and self.player.playbackState() != QMediaPlayer.PlayingState and abs(t - target) <= 0.1:
+            t = target
         self.caption_item.set_time(t)
         if abs(t - self._last_emit_t) >= PLAYHEAD_EMIT_INTERVAL:
             self._last_emit_t = t
@@ -274,6 +282,8 @@ class VideoPreviewWidget(QWidget):
 
     def _on_playback_state_changed(self, state) -> None:
         self.play_btn.setText("Pause" if state == QMediaPlayer.PlayingState else "Play")
+        if state == QMediaPlayer.PlayingState:
+            self._seek_target = None  # playing: the frames' own times rule again
 
     def _on_position_changed(self, position_ms: int) -> None:
         self.seek_slider.blockSignals(True)
