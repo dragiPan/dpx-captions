@@ -170,10 +170,13 @@ class VideoPreviewWidget(QWidget):
         self.video_item.nativeSizeChanged.connect(self._on_native_size_changed)
         self.video_item.videoSink().videoFrameChanged.connect(self._on_frame)
 
+        self.player.mediaStatusChanged.connect(self._on_media_status_changed)
+
         self._duration_s = 0.0
         self._source_size = (1080, 1920)
         self._last_emit_t = -1.0
         self._laid_out = False
+        self._pending_seek: float | None = None
 
     # -------------------------------------------------------------------- API
     def load_video(self, path: str) -> None:
@@ -203,6 +206,19 @@ class VideoPreviewWidget(QWidget):
     def seek(self, seconds: float) -> None:
         self.player.setPosition(round(seconds * 1000))
         self.caption_item.set_time(seconds)
+
+    def seek_when_loaded(self, seconds: float) -> None:
+        """Seeks once the current source has loaded; a seek issued right
+        after load_video() is dropped by the player."""
+        if self.player.mediaStatus() in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferedMedia):
+            self.seek(seconds)
+        else:
+            self._pending_seek = seconds
+
+    def _on_media_status_changed(self, status) -> None:
+        if self._pending_seek is not None and status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferedMedia):
+            seconds, self._pending_seek = self._pending_seek, None
+            self.seek(seconds)
 
     def toggle_play(self) -> None:
         if self.player.playbackState() == QMediaPlayer.PlayingState:

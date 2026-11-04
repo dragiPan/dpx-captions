@@ -276,6 +276,12 @@ u `.dpxproj` fajl. **Open Project...** vraća sesiju bez ponovnog transkribovanj
 Projekat čuva i titlove kakvi su bili pri generisanju, tako da učenje ispravki radi i
 kada projekat otvoriš kasnije pa tek onda exportuješ.
 
+Poslednja sesija se čuva sama (oko sekunde posle svake izmene i pri zatvaranju) u
+`%APPDATA%\DPX Captions\session.dpxproj`. Kada ponovo pokreneš aplikaciju, vraća se isti
+klip sa svim titlovima, stilom, aspect ratio-m i pozicijom playhead-a — ako taj klip i
+dalje postoji na istom mestu; ako ne postoji, aplikacija kreće prazna. Undo istorija se
+ne pamti između pokretanja.
+
 ## Podešavanja
 
 Stil, opcije, izabrani model i aspect ratio se pamte između sesija u:

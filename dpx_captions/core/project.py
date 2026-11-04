@@ -5,6 +5,7 @@ and resumed without re-transcribing."""
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -60,9 +61,13 @@ def save_project(
     aspect: Aspect = Aspect.AUTO,
     baseline: list[Word] | None = None,
     learned: set[str] | None = None,
+    playhead: float = 0.0,
 ) -> None:
     """`baseline` is the word list as generated, before the user's edits, and
-    `learned` the edits already counted from it (see core.corrections)."""
+    `learned` the edits already counted from it (see core.corrections).
+
+    Written to a temporary file first, so a crash mid-write (autosave runs
+    often) never leaves a half-written project behind."""
     data = {
         "version": 1,
         "video_path": video_path,
@@ -73,8 +78,12 @@ def save_project(
         "cards": cards_to_dict(cards),
         "baseline": [word_to_dict(w) for w in baseline or []],
         "learned": sorted(learned or ()),
+        "playhead": playhead,
     }
-    Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
 
 
 def load_project(path: str | Path) -> dict:
@@ -90,4 +99,11 @@ def load_project(path: str | Path) -> dict:
         "cards": cards_from_dict(data["cards"]),
         "baseline": [word_from_dict(w) for w in data.get("baseline", [])],
         "learned": set(data.get("learned", [])),
+        "playhead": float(data.get("playhead", 0.0)),
     }
+
+
+def session_path() -> Path:
+    """The autosaved last session, restored when the app starts."""
+    base = os.environ.get("APPDATA") or str(Path.home())
+    return Path(base) / "DPX Captions" / f"session{PROJECT_SUFFIX}"

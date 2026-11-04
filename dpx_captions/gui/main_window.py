@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -29,7 +29,7 @@ from ..core import ffmpeg_util
 from ..core.corrections import CorrectionStore, baseline_from_cards, learn_from_edits
 from ..core.gpu import detect_compute_backend
 from ..core.history import History
-from ..core.project import PROJECT_SUFFIX, load_project, save_project
+from ..core.project import PROJECT_SUFFIX, load_project, save_project, session_path
 from ..core.settings import load_settings, save_settings
 from ..core.style import TextCase
 from ..core.transcribe import MODEL_SIZES
@@ -76,8 +76,18 @@ class MainWindow(QWidget):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
 
+        # The session autosaves shortly after every change and on close, and
+        # is restored at startup, so closing the app never loses work.
+        self._session_timer = QTimer(self)
+        self._session_timer.setSingleShot(True)
+        self._session_timer.setInterval(1000)
+        self._session_timer.timeout.connect(self._save_session)
+        self._restoring_session = False
+
         self._install_shortcuts()
         self._restore_settings()
+        self._restore_session()
+        self.video_preview.aspect_combo.currentIndexChanged.connect(self._schedule_session_save)
         self._check_ffmpeg()
 
     def _install_shortcuts(self) -> None:
@@ -288,6 +298,7 @@ class MainWindow(QWidget):
         self.timeline.set_duration(info.duration)
         self.video_preview.set_style(self.style_panel.style)
         self._load_waveform(path)
+        self._schedule_session_save()
 
     def _load_waveform(self, path: str) -> None:
         self.waveform_worker = WaveformWorker(path)
@@ -345,6 +356,7 @@ class MainWindow(QWidget):
         if skip != "timeline":
             self.timeline.set_cards(self.cards, formatting)
         self.video_preview.set_cards(self.cards)
+        self._schedule_session_save()
 
     def _on_editor_cards_changed(self) -> None:
         if self._applying_history:
@@ -411,6 +423,7 @@ class MainWindow(QWidget):
 
     def _on_style_or_formatting_changed(self) -> None:
         self.video_preview.set_style(self.style_panel.style)
+        self._schedule_session_save()
 
     # ---------------------------------------------------------------- project
     def _on_save_project(self) -> None:
@@ -427,6 +440,7 @@ class MainWindow(QWidget):
             path, self.video_path, MODEL_SIZES[self.model_combo.currentText()],
             self.style_panel.formatting, self.style_panel.style, self.cards,
             self.video_preview.aspect(), self.baseline_words, self.learned_signatures,
+            self.timeline.playhead_t,
         )
 
     def _on_open_project(self) -> None:
@@ -441,7 +455,9 @@ class MainWindow(QWidget):
         except (OSError, ValueError, KeyError) as exc:
             QMessageBox.critical(self, "Could not open project", str(exc))
             return
+        self._apply_project(data)
 
+    def _apply_project(self, data: dict) -> None:
         video_path = data["video_path"]
         if not Path(video_path).exists():
             QMessageBox.warning(
@@ -465,6 +481,46 @@ class MainWindow(QWidget):
         self._update_history_buttons()
         self._push_cards_everywhere()
         self.export_btn.setEnabled(bool(self.video_info))
+        if self.video_info and data["playhead"] > 0:
+            self.timeline.set_playhead(data["playhead"])
+            self.video_preview.seek_when_loaded(data["playhead"])
+
+    # ---------------------------------------------------------------- session
+    def _schedule_session_save(self, *_args) -> None:
+        if not self._restoring_session:
+            self._session_timer.start()
+
+    def _save_session(self) -> None:
+        if not self.video_path:
+            return
+        try:
+            path = session_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            save_project(
+                path, self.video_path, MODEL_SIZES[self.model_combo.currentText()],
+                self.style_panel.formatting, self.style_panel.style, self.cards,
+                self.video_preview.aspect(), self.baseline_words, self.learned_signatures,
+                self.timeline.playhead_t,
+            )
+        except Exception:  # noqa: BLE001 - autosave must never interrupt editing
+            pass
+
+    def _restore_session(self) -> None:
+        """Reopens the last session if its clip still exists."""
+        path = session_path()
+        if not path.exists():
+            return
+        try:
+            data = load_project(path)
+        except Exception:  # noqa: BLE001 - a broken session just means a fresh start
+            return
+        if not Path(data["video_path"]).exists():
+            return
+        self._restoring_session = True
+        try:
+            self._apply_project(data)
+        finally:
+            self._restoring_session = False
 
     # ----------------------------------------------------------- find/replace
     def _on_find_replace(self) -> None:
@@ -513,6 +569,8 @@ class MainWindow(QWidget):
         )
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        self._session_timer.stop()
+        self._save_session()
         self._save_settings()
         super().closeEvent(event)
 
