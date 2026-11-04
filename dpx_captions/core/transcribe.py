@@ -24,6 +24,9 @@ class Word:
     start: float
     end: float
     probability: float = 1.0
+    # Normalized Whisper phrase this word was rewritten from by a learned
+    # correction (core.corrections), or None for words as Whisper wrote them.
+    source: str | None = None
 
 
 @dataclass

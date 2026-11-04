@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
 from . import ffmpeg_util
 from .aspect import Aspect, canvas_size
 from .caption_builder import CaptionCard, build_captions
+from .corrections import CorrectionStore, apply_corrections
 from .gpu import ComputeBackend, detect_compute_backend
 from .style import AnimationStyle, CaptionFormatting
 from .transcribe import flatten_words, transcribe
@@ -20,6 +21,8 @@ class GenerateResult:
     cards: list[CaptionCard]
     video_info: ffmpeg_util.VideoInfo
     audio_path: Path
+    # (what Whisper wrote, what a learned correction turned it into)
+    applied_corrections: list[tuple[str, str]] = field(default_factory=list)
 
 
 def generate_captions(
@@ -28,8 +31,10 @@ def generate_captions(
     model_size: str = "large-v3-turbo",
     backend: ComputeBackend | None = None,
     progress_cb: Callable[[str, float], None] | None = None,
+    corrections: CorrectionStore | None = None,
 ) -> GenerateResult:
-    """Runs audio extraction + transcription + caption grouping for a video."""
+    """Runs audio extraction + transcription + learned corrections + caption
+    grouping for a video. `corrections` defaults to the user's saved rules."""
     backend = backend or detect_compute_backend()
     video_info = ffmpeg_util.probe(video_path)
 
@@ -58,10 +63,16 @@ def generate_captions(
     words = flatten_words(segments)
 
     if progress_cb:
+        progress_cb("applying_learned_corrections", 1.0)
+    store = corrections if corrections is not None else CorrectionStore.load()
+    words, applied = apply_corrections(words, store)
+
+    if progress_cb:
         progress_cb("grouping_captions", 1.0)
     cards = build_captions(words, formatting)
 
-    return GenerateResult(cards=cards, video_info=video_info, audio_path=audio_path)
+    return GenerateResult(cards=cards, video_info=video_info, audio_path=audio_path,
+                          applied_corrections=applied)
 
 
 def export_video(

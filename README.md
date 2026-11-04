@@ -113,6 +113,8 @@ ključa nova verzija se ne može instalirati preko stare.
   direktno
 - **Timeline editor** — waveform, prevlačenje, skraćivanje, sečenje i overwrite kao u
   pravom editoru, sa undo/redo
+- **Uči iz tvojih ispravki** — pri exportu pamti šta si prepravio u transkriptu
+  ("zahtjeva" → "zahteva", "dobit ces" → "dobices") i sledeći put to ispravlja sam
 - **Aspect ratio** — Auto / 9:16 / 16:9 / 1:1 / 4:5, sa istim kadriranjem u preview-u i exportu
 - **Safe-area vodilice** — pokazuju gde TikTok/Reels/Shorts interfejs prekriva kadar
 
@@ -237,10 +239,42 @@ Crveno su zone koje prekriva interfejs mreže, žuti okvir je siguran prostor.
 prilagođenim izvoru. Ako je izabran aspect ratio različit od izvornog, video se skalira
 i dopunjava crnim trakama do tog formata.
 
+### 7. Naučene ispravke
+
+Posle uspešnog exporta program uporedi titlove onako kako ih je generisao sa titlovima
+kako si ih ti ostavio, i svaku prepravljenu reč ili frazu zapamti kao pravilo:
+
+| Whisper napisao | Ti prepravio |
+|---|---|
+| zahtjeva | zahteva |
+| dobit ćeš | dobićeš (spojene reči) |
+| vrijeme | vreme |
+
+Sledeći put, odmah posle transkripcije a pre nego što se titlovi prikažu, program prođe
+kroz Whisper-ov tekst i primeni sva pravila — editor se otvara sa već ispravljenim
+greškama. Ispod dugmeta Generate piše koliko ispravki je primenjeno, a prozor posle
+exporta prikazuje šta je novo naučeno.
+
+- Poređenje ne razlikuje velika i mala slova i ignoriše interpunkciju. Zarez ili tačka
+  iz Whisper-ovog teksta ostaju na mestu i posle ispravke.
+- Izmena se računa samo ako je na istom mestu u vremenu kao generisani tekst, tako da
+  pomeranje, brisanje ili dodavanje kartica ne pravi pogrešna pravila. Obrisane reči
+  (npr. poštapalice) se ne pamte kao ispravke.
+- Ako vratiš automatsku ispravku na staro, to pravilo slabi i nestaje kad izgubi sve
+  "glasove". Ako istu reč prepraviš na dva načina, pobeđuje češća ispravka.
+- Ponovljeni export istog projekta ne broji iste ispravke dva puta.
+- **Learned corrections** (pored Find & Replace) prikazuje sva pravila i briše pogrešna.
+
+Pravila se čuvaju u `%APPDATA%\DPX Captions\corrections.json`. Za projekte snimljene pre
+ove verzije (bez sačuvanog generisanog teksta) učenje se preskače — generiši ponovo.
+Android verzija za sada ne uči ispravke.
+
 ## Projekti
 
 **Save Project...** snima sve — putanju do klipa, stil, opcije i sve izmenjene titlove —
 u `.dpxproj` fajl. **Open Project...** vraća sesiju bez ponovnog transkribovanja.
+Projekat čuva i titlove kakvi su bili pri generisanju, tako da učenje ispravki radi i
+kada projekat otvoriš kasnije pa tek onda exportuješ.
 
 ## Podešavanja
 

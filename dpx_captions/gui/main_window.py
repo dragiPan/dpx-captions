@@ -26,12 +26,15 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import ffmpeg_util
+from ..core.corrections import CorrectionStore, baseline_from_cards, learn_from_edits
 from ..core.gpu import detect_compute_backend
 from ..core.history import History
 from ..core.project import PROJECT_SUFFIX, load_project, save_project
 from ..core.settings import load_settings, save_settings
+from ..core.style import TextCase
 from ..core.transcribe import MODEL_SIZES
 from .caption_editor import CaptionEditorWidget
+from .corrections_dialog import CorrectionsDialog
 from .find_replace import FindReplaceDialog, replace_in_cards
 from .style_panel import StylePanel
 from .timeline_widget import TimelineWidget
@@ -59,6 +62,10 @@ class MainWindow(QWidget):
         self.waveform_worker = None
         self.history = History()
         self._applying_history = False
+        # The words as generated, before any edits, and the edits already
+        # learned from them; an export compares the cards against these.
+        self.baseline_words: list = []
+        self.learned_signatures: set[str] = set()
 
         root = QHBoxLayout(self)
         splitter = QSplitter(Qt.Horizontal)
@@ -196,6 +203,8 @@ class MainWindow(QWidget):
         self.delete_card_btn.clicked.connect(lambda: self.timeline.delete_selected())
         self.find_btn = QPushButton("Find && Replace")
         self.find_btn.clicked.connect(self._on_find_replace)
+        self.corrections_btn = QPushButton("Learned corrections")
+        self.corrections_btn.clicked.connect(self._on_show_corrections)
         zoom_out_btn = QPushButton("−")
         zoom_out_btn.setFixedWidth(32)
         zoom_out_btn.clicked.connect(lambda: self.timeline.zoom_by(1 / 1.3))
@@ -205,7 +214,7 @@ class MainWindow(QWidget):
         fit_btn = QPushButton("Fit")
         fit_btn.setFixedWidth(48)
         fit_btn.clicked.connect(lambda: self.timeline.zoom_fit())
-        for widget in (self.split_btn, self.delete_card_btn, self.find_btn):
+        for widget in (self.split_btn, self.delete_card_btn, self.find_btn, self.corrections_btn):
             tools.addWidget(widget)
         tools.addStretch(1)
         tools.addWidget(QLabel("Zoom"))
@@ -309,6 +318,8 @@ class MainWindow(QWidget):
     def _on_generate_finished(self, result) -> None:
         self.video_info = result.video_info
         self.cards = result.cards
+        self.baseline_words = baseline_from_cards(result.cards)
+        self.learned_signatures = set()
         self.history.reset(self.cards)
         self._update_history_buttons()
         self._push_cards_everywhere()
@@ -317,6 +328,10 @@ class MainWindow(QWidget):
         self.progress_bar.setVisible(False)
         self.generate_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
+        applied = len(result.applied_corrections)
+        self.progress_label.setText(
+            f"Done - applied {applied} learned correction(s)" if applied else "Done"
+        )
 
     def _on_generate_failed(self, message: str) -> None:
         self.progress_bar.setVisible(False)
@@ -411,7 +426,7 @@ class MainWindow(QWidget):
         save_project(
             path, self.video_path, MODEL_SIZES[self.model_combo.currentText()],
             self.style_panel.formatting, self.style_panel.style, self.cards,
-            self.video_preview.aspect(),
+            self.video_preview.aspect(), self.baseline_words, self.learned_signatures,
         )
 
     def _on_open_project(self) -> None:
@@ -444,6 +459,8 @@ class MainWindow(QWidget):
                 self.model_combo.setCurrentText(label)
 
         self.cards = data["cards"]
+        self.baseline_words = data["baseline"]
+        self.learned_signatures = data["learned"]
         self.history.reset(self.cards)
         self._update_history_buttons()
         self._push_cards_everywhere()
@@ -523,7 +540,41 @@ class MainWindow(QWidget):
         self.progress_bar.setVisible(False)
         self.progress_bar.setRange(0, 100)
         self.export_btn.setEnabled(True)
-        QMessageBox.information(self, "Export complete", f"Saved to:\n{out_path}")
+        QMessageBox.information(self, "Export complete", f"Saved to:\n{out_path}{self._learn_from_export()}")
+
+    def _learn_from_export(self) -> str:
+        """Records the user's edits as learned corrections; returns a summary
+        for the export dialog. A failure here must never hide a good export."""
+        if not self.baseline_words:
+            return ""
+        try:
+            store = CorrectionStore.load()
+            report = learn_from_edits(
+                self.baseline_words, self.cards, store,
+                case_meaningful=self.style_panel.formatting.text_case == TextCase.NORMAL,
+                seen=self.learned_signatures,
+            )
+            if report.changed:
+                store.save()
+        except Exception as exc:  # noqa: BLE001 - reported, not raised
+            return f"\n\nCould not save learned corrections: {exc}"
+
+        lines = []
+        if report.learned:
+            lines.append(f"Learned {len(report.learned)} correction(s):")
+            shown = list(dict.fromkeys(f"  {src} → {dst}" for src, dst in report.learned))
+            lines.extend(shown[:12])
+            if len(shown) > 12:
+                lines.append(f"  … and {len(shown) - 12} more")
+        if report.rejected:
+            undone = ", ".join(dict.fromkeys(f"{src} → {dst}" for src, dst in report.rejected))
+            lines.append(f"Weakened {len(report.rejected)} correction(s) you undid: {undone}")
+        if report.confirmed:
+            lines.append(f"Confirmed {report.confirmed} automatic correction(s).")
+        return "\n\n" + "\n".join(lines) if lines else ""
+
+    def _on_show_corrections(self) -> None:
+        CorrectionsDialog(CorrectionStore.load(), self).exec()
 
     def _on_export_failed(self, message: str) -> None:
         self.progress_bar.setVisible(False)
