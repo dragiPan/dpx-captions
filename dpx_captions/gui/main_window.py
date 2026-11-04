@@ -41,7 +41,7 @@ from .progress import ProgressReporter
 from .style_panel import StylePanel
 from .timeline_widget import TimelineWidget
 from .video_preview import VideoPreviewWidget
-from .workers import ExportWorker, GenerateWorker, WaveformWorker, run_in_thread
+from .workers import ExportWorker, GenerateWorker, PreloadWorker, WaveformWorker, run_in_thread
 
 TIMELINE_SCROLL_HEIGHT = 160
 
@@ -123,6 +123,11 @@ class MainWindow(QWidget):
         self._install_shortcuts()
         self._restore_settings()
         self._restore_session()
+        self.preload_thread = None
+        self.preload_worker = None
+        self._preload_model()
+        self.model_combo.currentTextChanged.connect(lambda _: self._preload_model())
+        QApplication.instance().aboutToQuit.connect(self._wait_for_preload)
         self.video_preview.aspect_combo.currentIndexChanged.connect(self._schedule_session_save)
         self._check_ffmpeg()
 
@@ -246,6 +251,31 @@ class MainWindow(QWidget):
     def _on_force_cpu_toggled(self, checked: bool) -> None:
         self.backend = detect_compute_backend(prefer_cpu=checked)
         self.gpu_label.setText(f"Compute: {self.backend.label}")
+        if getattr(self, "preload_worker", None) is not None or getattr(self, "preload_thread", None) is not None:
+            self._preload_model()
+
+    def _wait_for_preload(self) -> None:
+        """A model load can't be interrupted, and a QThread destroyed while
+        running takes the whole process down. So on close the window goes
+        away at once (the session is already saved) and the process finishes
+        the load quietly before exiting."""
+        thread = self.preload_thread
+        if thread is not None and thread.isRunning():
+            self.hide()
+            QApplication.processEvents()
+            thread.wait()
+
+    def _preload_model(self) -> None:
+        """Loads the selected Whisper model in the background (if it's already
+        downloaded), so Generate starts transcribing right away."""
+        if self.preload_thread is not None and self.preload_thread.isRunning():
+            return
+        self.gpu_label.setText(f"Compute: {self.backend.label}")
+        self.preload_worker = PreloadWorker(MODEL_SIZES[self.model_combo.currentText()], self.backend)
+        self.preload_worker.finished.connect(
+            lambda loaded: loaded and self.gpu_label.setText(f"Compute: {self.backend.label} · model ready")
+        )
+        self.preload_thread = run_in_thread(self.preload_worker)
 
     # -------------------------------------------------------------- Right side
     def _build_right_panel(self) -> QWidget:
@@ -680,6 +710,7 @@ class MainWindow(QWidget):
         self._session_timer.stop()
         self._save_session()
         self._save_settings()
+        self._wait_for_preload()
         super().closeEvent(event)
 
     def _on_export_clicked(self) -> None:

@@ -38,6 +38,27 @@ class GenerateWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class PreloadWorker(QObject):
+    """Loads the Whisper model in the background at startup, so the first
+    Generate doesn't wait for it."""
+
+    finished = Signal(bool)
+    failed = Signal(str)
+
+    def __init__(self, model_size: str, backend: ComputeBackend):
+        super().__init__()
+        self.model_size = model_size
+        self.backend = backend
+
+    def run(self) -> None:
+        try:
+            from ..core.transcribe import preload_model
+
+            self.finished.emit(preload_model(self.model_size, self.backend))
+        except Exception as exc:  # e.g. CUDA libraries missing: Generate will report it properly
+            self.failed.emit(str(exc))
+
+
 class WaveformWorker(QObject):
     finished = Signal(object)  # numpy array of peaks
     failed = Signal(str)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
@@ -61,11 +62,43 @@ def load_wav_samples(audio_path: str):
     return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 
 
+_models: dict[tuple[str, str, str], object] = {}
+_models_lock = threading.Lock()
+
+
 def load_model(model_size: str = "large-v3-turbo", backend: ComputeBackend | None = None):
+    """The Whisper model, kept in memory after the first load.
+
+    Loading takes 5-40 s (the first time after boot, ~1.6 GB of model plus
+    the CUDA libraries come off disk) against ~7 s to transcribe a 90 s clip,
+    so it is loaded once per session and shared. The lock makes a Generate
+    that arrives during the startup preload wait for it instead of loading a
+    second copy into GPU memory.
+    """
     from faster_whisper import WhisperModel
 
     backend = backend or detect_compute_backend()
-    return WhisperModel(model_size, device=backend.device, compute_type=backend.compute_type)
+    key = (model_size, backend.device, backend.compute_type)
+    with _models_lock:
+        model = _models.get(key)
+        if model is None:
+            _models.clear()  # one model at a time: switching frees the previous one's GPU memory
+            model = WhisperModel(model_size, device=backend.device, compute_type=backend.compute_type)
+            _models[key] = model
+        return model
+
+
+def preload_model(model_size: str, backend: ComputeBackend | None = None) -> bool:
+    """Loads the model ahead of the first Generate, if it is already
+    downloaded - never starts a download on its own. Returns whether it did."""
+    from faster_whisper.utils import download_model
+
+    try:
+        download_model(model_size, local_files_only=True)
+    except Exception:  # noqa: BLE001 - not downloaded yet (or no cache): leave it to Generate
+        return False
+    load_model(model_size, backend)
+    return True
 
 
 def transcribe(

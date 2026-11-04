@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
@@ -149,15 +150,51 @@ def burn_captions(
         filters.append(f"pad={cw}:{ch}:(ow-iw)/2:(oh-ih)/2:black")
     filters.append(ass_filter)
 
-    cmd = [
-        ffmpeg_path(), "-y", "-v", "error", "-nostats", "-progress", "pipe:1", "-i", video_path,
-        "-vf", ",".join(filters),
-        "-c:v", "libx264", "-preset", "medium",
-        "-b:v", str(target_bitrate), "-maxrate", str(int(target_bitrate * 1.5)),
-        "-bufsize", str(int(target_bitrate * 2)),
-        "-c:a", "copy",
-        output_path,
-    ]
+    def command(encoder: list[str]) -> list[str]:
+        return [
+            ffmpeg_path(), "-y", "-v", "error", "-nostats", "-progress", "pipe:1", "-i", video_path,
+            "-vf", ",".join(filters),
+            *encoder,
+            "-b:v", str(target_bitrate), "-maxrate", str(int(target_bitrate * 1.5)),
+            "-bufsize", str(int(target_bitrate * 2)),
+            "-c:a", "copy",
+            output_path,
+        ]
+
+    if nvenc_available():
+        try:
+            _run_with_progress(command(NVENC), info.duration, progress_cb)
+            return
+        except RuntimeError:
+            # E.g. a 10-bit HDR source, which NVENC's H.264 can't take: the CPU encoder can.
+            if progress_cb:
+                progress_cb(0.0)
+    _run_with_progress(command(X264), info.duration, progress_cb)
+
+
+# Measured on a 1:27 1080x1920 clip at its own 38 Mbit/s: libx264 took 68 s,
+# NVENC on an RTX 4060 7.5 s, with the same quality against the source
+# (SSIM 0.9950 vs 0.9947, PSNR 50.4 vs 50.7 dB).
+NVENC = ["-c:v", "h264_nvenc", "-preset", "p5"]
+X264 = ["-c:v", "libx264", "-preset", "medium"]
+
+
+@lru_cache(maxsize=1)
+def nvenc_available() -> bool:
+    """Whether this ffmpeg can encode H.264 on an NVIDIA GPU right now
+    (encoder built in, driver present, a session free) - tried once."""
+    try:
+        result = subprocess.run(
+            [ffmpeg_path(), "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.2",
+             *NVENC, "-f", "null", "-"],
+            capture_output=True, timeout=30, creationflags=_NO_WINDOW,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return False
+    return result.returncode == 0
+
+
+def _run_with_progress(cmd: list[str], duration: float, progress_cb) -> None:
     # stderr goes to a file: with only stdout drained, a chatty stderr pipe
     # could fill up and stall ffmpeg.
     with tempfile.TemporaryFile() as err:
@@ -165,8 +202,8 @@ def burn_captions(
                                 text=True, encoding="utf-8", errors="replace")
         for line in proc.stdout:
             key, _, value = line.strip().partition("=")
-            if progress_cb and key == "out_time_us" and info.duration > 0 and value.isdigit():
-                progress_cb(min(int(value) / 1e6 / info.duration, 1.0))
+            if progress_cb and key == "out_time_us" and duration > 0 and value.isdigit():
+                progress_cb(min(int(value) / 1e6 / duration, 1.0))
         proc.wait()
         if proc.returncode != 0:
             err.seek(0)
